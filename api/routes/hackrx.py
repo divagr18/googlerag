@@ -11,7 +11,7 @@ from api.state import ml_models # <-- Import from the neutral state file
 from api.core.document_processor import download_document, extract_text_from_pdf_bytes, chunk_text
 from api.core.vector_store import RequestKnowledgeBase
 from api.core.agent_logic import answer_question_with_agent # <-- Updated import
-
+import time
 # --- Router and Pydantic Models (Unchanged) ---
 hackrx_router = APIRouter(prefix="/hackrx")
 
@@ -37,6 +37,8 @@ async def run_submission(request: RunRequest = Body(...)):
     """
     Processes a document and answers questions using parallel Agno agents.
     """
+    start = time.perf_counter()
+
     embedding_model = ml_models.get("embedding_model")
     if not embedding_model:
         raise HTTPException(status_code=503, detail="Embedding model is not ready.")
@@ -62,7 +64,8 @@ async def run_submission(request: RunRequest = Body(...)):
         print(f"Spawning {len(request.questions)} Agno agents in parallel...")
         answers = await asyncio.gather(*tasks)
         print("✅ All agent tasks completed.")
-        
+        end = time.perf_counter()
+        print(f"Total processing time: {end - start:.2f} seconds")
         return RunResponse(answers=answers)
 
     except ValueError as e:
