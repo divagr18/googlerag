@@ -12,7 +12,7 @@ MILVUS_HOST = "localhost"
 MILVUS_PORT = "19530"
 COLLECTION_NAME = "bajaj_insurance_pdfs" # Use the collection with real PDF data
 OPENAI_MODEL_NAME = "text-embedding-3-small"
-OPENAI_CHAT_MODEL = "gpt-3.5-turbo" # A fast and capable model for generation
+OPENAI_CHAT_MODEL = "gpt-4.1-mini" # A fast and capable model for generation
 
 # --- 2. Initialize Clients and Connections ---
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
