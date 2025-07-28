@@ -12,7 +12,6 @@ from api.state import ml_models  # <-- Import from the neutral state file
 
 
 # A simple dictionary to hold the loaded model
-ml_models = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -28,6 +27,7 @@ async def lifespan(app: FastAPI):
     print(f"Loading embedding model '{model_name}'...")
     ml_models["embedding_model"] = SentenceTransformer(model_name, device=device)
     print("✅ Embedding model loaded successfully.")
+    print(ml_models)
     
     yield
     

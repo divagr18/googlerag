@@ -1,4 +1,3 @@
-# api/core/vector_store.py
 import numpy as np
 import faiss
 from typing import List
@@ -20,12 +19,17 @@ class RequestKnowledgeBase:
         
         self.chunks = chunks
         print(f"Embedding {len(chunks)} chunks for the knowledge base...")
-        embeddings = self.model.encode(chunks, convert_to_tensor=True, show_progress_bar=False)
+        
+        # --- CHANGE 1: Encode directly to a NumPy array ---
+        # No need for convert_to_tensor=True here. The default is NumPy.
+        embeddings = self.model.encode(chunks, show_progress_bar=False)
+        
+        # Ensure it's a float32 array, which FAISS prefers
+        embeddings_np = np.array(embeddings, dtype='float32')
         
         # Normalize embeddings for cosine similarity (using Inner Product)
-        faiss.normalize_L2(embeddings)
+        faiss.normalize_L2(embeddings_np)
         
-        embeddings_np = embeddings.cpu().numpy().astype('float32')
         dimension = embeddings_np.shape[1]
         
         if faiss.get_num_gpus() > 0:
@@ -42,12 +46,17 @@ class RequestKnowledgeBase:
         if self.index is None:
             raise ValueError("Knowledge base has not been built yet.")
         
-        query_embedding = self.model.encode([query], convert_to_tensor=True)
-        faiss.normalize_L2(query_embedding)
-        query_embedding_np = query_embedding.cpu().numpy().astype('float32')
+        # --- CHANGE 2: Encode the query directly to a NumPy array ---
+        query_embedding = self.model.encode([query]) # The [query] ensures it's a 2D array
         
+        # Ensure it's a float32 array
+        query_embedding_np = np.array(query_embedding, dtype='float32')
+        
+        # Normalize the query vector
+        faiss.normalize_L2(query_embedding_np)
+        
+        # Now we are guaranteed to be passing a correctly shaped NumPy array
         distances, indices = self.index.search(query_embedding_np, k)
         
-        # Filter out invalid indices (-1) which can occur if k > number of vectors
         valid_indices = [i for i in indices[0] if i != -1]
         return [self.chunks[i] for i in valid_indices]

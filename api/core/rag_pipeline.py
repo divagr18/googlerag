@@ -1,7 +1,9 @@
 # api/core/agent_logic.py  (New name for clarity)
 from typing import List
-from agno import Agent
+from agno.agent import Agent
 from functools import partial
+from agno.models.openai import OpenAIChat
+llm = OpenAIChat(model="gpt-4.1-mini", temperature=0.1)  # Fast, capable, and cost-effective
 
 # Import the Knowledge Base class
 from .vector_store import RequestKnowledgeBase
@@ -35,8 +37,7 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
     agent = Agent(
         tools=[search_document_clauses],
         instructions=agent_instructions,
-        model="gpt-4o-mini", # Fast, capable, and cost-effective
-        temperature=0.0,
+        model=llm, # Fast, capable, and cost-effective
         # Note: Agno automatically uses the OPENAI_API_KEY from the environment
     )
 
