@@ -44,18 +44,25 @@ async def run_submission(request: RunRequest = Body(...)):
         raise HTTPException(status_code=503, detail="Embedding model is not ready.")
 
     try:
+        t0 = time.perf_counter()
         # Phase 1: Build the Knowledge Base (once per request)
         print(f"Processing document from: {request.documents}")
         pdf_bytes = await download_document(request.documents)
         document_text = extract_text_from_pdf_bytes(pdf_bytes)
         chunks = chunk_text(document_text)
+        t1 = time.perf_counter()
+        print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")
         
+        t2 = time.perf_counter()
         knowledge_base = RequestKnowledgeBase(embedding_model)
         knowledge_base.build(chunks)
+        t3 = time.perf_counter()
+        print(f"Embedding & FAISS Indexing took {t3 - t2:.2f} seconds")
         
         # Phase 2: Run Parallel Agent Tasks
         # Create a list of concurrent tasks, one for each question.
         # Each task will run our agent logic with the shared knowledge base.
+        t4 = time.perf_counter()
         tasks = [
             answer_question_with_agent(question, knowledge_base)
             for question in request.questions
@@ -64,6 +71,9 @@ async def run_submission(request: RunRequest = Body(...)):
         print(f"Spawning {len(request.questions)} Agno agents in parallel...")
         answers = await asyncio.gather(*tasks)
         print("✅ All agent tasks completed.")
+        t5 = time.perf_counter()
+        print(f"⏱️ Parallel Agent Execution took: {t5 - t4:.4f} seconds.")
+
         end = time.perf_counter()
         print(f"Total processing time: {end - start:.2f} seconds")
         return RunResponse(answers=answers)

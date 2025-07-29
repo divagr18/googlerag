@@ -42,7 +42,7 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
         tools=[search_document_clauses],
         instructions=agent_instructions,
         model=llm,
-        debug_mode=True  # Fast, capable, and cost-effective
+        debug_mode=False  # Fast, capable, and cost-effective
         # Note: Agno automatically uses the OPENAI_API_KEY from the environment
     )
 
