@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     
-    model_name = 'all-MiniLM-L6-v2'
+    model_name = 'all-mpnet-base-v2'
     print(f"Loading embedding model '{model_name}'...")
     ml_models["embedding_model"] = SentenceTransformer(model_name, device=device)
     print("✅ Embedding model loaded successfully.")

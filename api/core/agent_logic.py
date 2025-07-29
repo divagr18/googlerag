@@ -25,14 +25,14 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
         to answer the user's question.
         """
         print(f"Agent tool 'search_document_clauses' called with query: '{query_text}'")
-        return knowledge_base.search(query_text, k=5)
+        return knowledge_base.search(query_text, k=8)
 
     # Define the instructions for the agent.
     agent_instructions = """
     You are an expert Q&A system. Your task is to answer the user's question based ONLY on the information you find using the `search_document_clauses` tool.
     1. First, use the `search_document_clauses` tool with a query that is relevant to the user's question.
     2. Then, carefully analyze the retrieved text from the tool's output.
-    3. Formulate a direct and concise answer based *only* on the retrieved information.
+    3. Formulate a direct and concise answer based *only* on the retrieved information. Give specific answers, prefer numbers and facts.
     4. If the retrieved text does not contain the answer, you MUST state that you could not find the information in the provided document. Do not use any external knowledge.
     5. Do not write too long answers. Be concise and VERY to the point. Maximum 2 sentences. Do not add any special formatting or markdown, only plain text.
     """

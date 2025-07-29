@@ -41,7 +41,7 @@ class RequestKnowledgeBase:
         self.index.add(embeddings_np)
         print(f"✅ Knowledge base ready with {self.index.ntotal} vectors.")
 
-    def search(self, query: str, k: int = 5) -> List[str]:
+    def search(self, query: str, k: int = 8) -> List[str]:
         """Searches the knowledge base for the k most relevant chunks."""
         if self.index is None:
             raise ValueError("Knowledge base has not been built yet.")
