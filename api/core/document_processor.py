@@ -25,6 +25,6 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
         raise ValueError(f"Error extracting text from PDF: {e}")
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> List[str]:
-    """Splits text into smaller chunks."""
-    # A simple chunking strategy; more advanced methods exist (e.g., recursive)
-    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size - overlap)]
+    """Splits text into smaller chunks and prepends 'search_document: ' to each chunk."""
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size - overlap)]
+    return [f"search_document: {chunk}" for chunk in chunks]
