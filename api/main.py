@@ -15,23 +15,20 @@ from api.state import ml_models  # <-- Import from the neutral state file
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Load the ML model during startup and clear it during shutdown.
-    """
-    # Startup
     print("--- Server starting up ---")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     
-    model_name = 'all-mpnet-base-v2'
+    model_name = 'nomic-ai/nomic-embed-text-v1.5'
     print(f"Loading embedding model '{model_name}'...")
-    ml_models["embedding_model"] = SentenceTransformer(model_name, device=device)
+    model = SentenceTransformer(model_name, device=device,trust_remote_code=True)
+    model.max_seq_length = 512  # optional
+    ml_models["embedding_model"] = model
     print("✅ Embedding model loaded successfully.")
     print(ml_models)
-    
+
     yield
-    
-    # Shutdown
+
     print("--- Server shutting down ---")
     ml_models.clear()
 
