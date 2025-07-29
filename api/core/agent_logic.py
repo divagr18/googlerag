@@ -34,7 +34,7 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
     2. Then, carefully analyze the retrieved text from the tool's output.
     3. Formulate a direct and concise answer based *only* on the retrieved information. Give specific answers, prefer numbers and facts.
     4. If the retrieved text does not contain the answer, you MUST state that you could not find the information in the provided document. Do not use any external knowledge.
-    5. Do not write too long answers. Be VERY concise and EXTREMELY to the point. Maximum 2 sentences. Do not add any special formatting or markdown, only plain text.
+    5. Do not write too long answers. Be VERY concise and EXTREMELY to the point. Maximum 2 sentences. Do not add more info than needed. Final answer must be token usage efficient. Do not add any special formatting or markdown, only plain text.
     """
 
     # Create the Agno agent instance
