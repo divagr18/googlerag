@@ -6,8 +6,14 @@ from agno.agent import RunResponse
 from agno.models.openai import OpenAIChat
 from agno.models.google import Gemini
 from agno.models.groq import Groq
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 llm = OpenAIChat(id="gpt-4.1-nano", temperature=0.1)  # Fast, capable, and cost-effective
-llm = Gemini(id="gemini-2.5-flash", temperature=0.1)  # Fast, capable, and cost-effective
+llm = Gemini(id="gemini-2.5-flash", temperature=0.1, api_key=GEMINI_API_KEY)  # Fast, capable, and cost-effective
 # Import the Knowledge Base class
 from .vector_store import RequestKnowledgeBase
 
