@@ -8,7 +8,7 @@ from typing import List
 
 # Import our core logic and the ml_models state from main
 from api.state import ml_models # <-- Import from the neutral state file
-from api.core.document_processor import download_document, extract_text_from_pdf_bytes, chunk_text
+from api.core.document_processor import download_document, process_document, chunk_text
 from api.core.vector_store import RequestKnowledgeBase
 from api.core.agent_logic import answer_question_with_agent # <-- Updated import
 import time
@@ -47,9 +47,11 @@ async def run_submission(request: RunRequest = Body(...)):
         t0 = time.perf_counter()
         # Phase 1: Build the Knowledge Base (once per request)
         print(f"Processing document from: {request.documents}")
-        pdf_bytes = await download_document(request.documents)
-        document_text = extract_text_from_pdf_bytes(pdf_bytes)
-        chunks = chunk_text(document_text)
+        document_bytes = await download_document(request.documents)
+        # Offload CPU-bound operations
+        document_text = await process_document(request.documents, document_bytes)
+
+        chunks = await asyncio.to_thread(chunk_text, document_text)
         t1 = time.perf_counter()
         print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")
         
