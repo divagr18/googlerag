@@ -1,0 +1,9 @@
+google-genai
+fastapi
+uvicorn
+agno
+rankbm-25
+pydantic
+python-docx
+groq
+openai
