@@ -31,7 +31,7 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
         to answer the user's question.
         """
         print(f"Agent tool 'search_document_clauses' called with query: '{query_text}'")
-        return knowledge_base.search(query_text, k=8)
+        return knowledge_base.search(query_text, k=7)
 
     # Define the instructions for the agent.
     agent_instructions = """
@@ -48,7 +48,7 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
         tools=[search_document_clauses],
         instructions=agent_instructions,
         model=llm,
-        debug_mode=False,
+        debug_mode=True,
         reasoning=False  # Fast, capable, and cost-effective
         # Note: Agno automatically uses the OPENAI_API_KEY from the environment
     )

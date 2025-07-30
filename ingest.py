@@ -35,7 +35,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         print(f"Error reading {pdf_path}: {e}")
         return ""
 
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 600, overlap: int = 100) -> list[str]:
     """Splits text into chunks based on paragraphs, then by size."""
     # First, split by paragraphs
     paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]

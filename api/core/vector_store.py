@@ -48,7 +48,7 @@ class RequestKnowledgeBase:
         print(f"✅ FAISS vector index built with {self.faiss_index.ntotal} vectors.")
         print("✅ Knowledge base ready for hybrid search.")
 
-    def search(self, query: str, k: int = 5) -> List[str]:
+    def search(self, query: str, k: int = 3) -> List[str]:
         """
         Performs hybrid search using Reciprocal Rank Fusion (RRF).
         """

@@ -85,30 +85,46 @@ async def process_document(url: str, document_bytes: bytes) -> str:
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> List[str]:
     """
-    Splits text into smaller chunks.
-    Prepends 'search_document: ' to each chunk for embedding optimization.
+    Splits text into smaller chunks using a hierarchical strategy.
+    Tries to split by paragraph, then by line, then by character.
     """
-    # This chunking strategy is simple and works for any text source.
-    # A more advanced strategy could use sentence tokenizers.
-    paragraphs = text.split('\n\n')
-    chunks = []
-    current_chunk = ""
+    if not text:
+        return []
+
+    # Start with a list of the whole text
+    docs = [text]
     
-    for paragraph in paragraphs:
-        if not paragraph.strip():
-            continue
-        
-        # If adding this paragraph would exceed chunk size, finalize the current chunk
-        if len(current_chunk) + len(paragraph) + 2 > chunk_size and current_chunk:
-            chunks.append(f"search_document: {current_chunk.strip()}")
-            # Start new chunk with overlap from the previous one
-            overlap_text = current_chunk[-overlap:]
-            current_chunk = overlap_text + "\n\n" + paragraph
-        else:
-            current_chunk += ("\n\n" if current_chunk else "") + paragraph
+    # Define separators in order of preference
+    separators = ["\n\n", "\n", " ", ""]
     
-    # Add the last remaining chunk
-    if current_chunk.strip():
-        chunks.append(f"search_document: {current_chunk.strip()}")
+    for sep in separators:
+        new_docs = []
+        for doc in docs:
+            if len(doc) > chunk_size:
+                # Split the doc and add the pieces to new_docs
+                splits = doc.split(sep)
+                
+                # Re-combine small pieces to form chunks of the right size
+                current_chunk = ""
+                for i, part in enumerate(splits):
+                    # If adding the next part (and separator) would be too long
+                    if len(current_chunk) + len(part) + len(sep) > chunk_size and current_chunk:
+                        new_docs.append(current_chunk)
+                        # Start the next chunk with an overlap
+                        current_chunk = current_chunk[-(overlap if overlap < len(current_chunk) else 0):] + sep + part
+                    else:
+                        current_chunk += (sep if current_chunk else "") + part
+                
+                # Add the last remaining chunk
+                if current_chunk:
+                    new_docs.append(current_chunk)
+            else:
+                # If the doc is already small enough, keep it
+                new_docs.append(doc)
+        docs = new_docs
+
+    # Final pass to ensure no empty strings and add the prefix
+    final_chunks = [f"search_document: {doc.strip()}" for doc in docs if doc.strip()]
     
-    return chunks
+    print(f"Successfully chunked document into {len(final_chunks)} pieces.")
+    return final_chunks

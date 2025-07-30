@@ -2,8 +2,13 @@ google-genai
 fastapi
 uvicorn
 agno
-rankbm-25
+rank-bm25
 pydantic
 python-docx
 groq
 openai
+torch
+sentence-transformers
+groq
+PyMuPDF
+faiss-cpu
