@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     
-    model_name = 'nomic-ai/nomic-embed-text-v1.5'
+    model_name = 'all-MiniLM-L6-v2'
     print(f"Loading embedding model '{model_name}'...")
     model = SentenceTransformer(model_name, device=device,trust_remote_code=True)
     model.max_seq_length = 512  # optional

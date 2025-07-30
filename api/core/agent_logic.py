@@ -31,16 +31,18 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
         to answer the user's question.
         """
         print(f"Agent tool 'search_document_clauses' called with query: '{query_text}'")
-        return knowledge_base.search(query_text, k=7)
+        return knowledge_base.search(query_text, k=18)
 
     # Define the instructions for the agent.
     agent_instructions = """
-    You are an expert Q&A system. Your task is to answer the user's question based ONLY on the information you find using the `search_document_clauses` tool.
-    1. First, use the `search_document_clauses` tool with a query that is relevant to the user's question.
-    2. Then, carefully analyze the retrieved text from the tool's output.
-    3. Formulate a direct and concise answer based *only* on the retrieved information. Give specific answers, prefer numbers and facts.
-    4. If the retrieved text does not contain the answer, you MUST state that you could not find the information in the provided document. Do not use any external knowledge.
-    5. Do not write too long answers. Be VERY concise and EXTREMELY to the point. Maximum 2 sentences. Do not add more info than needed. Final answer must be token usage efficient. Do not add any special formatting or markdown, only plain text.
+    You are an expert Q&A system. Your task is to answer the user's question based ONLY on the information retrieved using the search_document_clauses tool.
+    Use the search_document_clauses tool with a query that is precise, complete, and directly aligned with the user's question.
+    Carefully analyze all retrieved clauses for factual content.
+    Your answer must be strictly based on the retrieved content — no assumptions, no external knowledge. If the content does not provide a direct answer, state that the answer is not available in the document. If the answer is a yes/no question, begin with "Yes" or "No" based on the retrieved content.
+    Include all relevant facts: waiting periods, exclusions, exceptions, special conditions (e.g., accident-related waivers), clause-specific rules, and all numerical details (percentages, durations, limits, counts, thresholds).
+    If the document mentions alternate scenarios or triggers that override the general rule (e.g., accident, emergency), you MUST include them.
+    If the information is not found in the retrieved content, explicitly state that the answer is not available in the document.
+    Your final answer must be short, dense, and precise — maximum 2 sentences. Do not restate the question. Avoid explanations, qualifiers, or formatting. No markdown formatting, escaping quotes etc.
     """
 
     # Create the Agno agent instance
