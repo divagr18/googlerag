@@ -83,7 +83,7 @@ async def process_document(url: str, document_bytes: bytes) -> str:
 
 # --- Chunking function (remains the same) ---
 
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 600, overlap: int = 90) -> List[str]:
     """
     Splits text into smaller chunks using a hierarchical strategy.
     Tries to split by paragraph, then by line, then by character.
