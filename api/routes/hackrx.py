@@ -3,17 +3,19 @@ import os
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from typing import List
 
 # Import our core logic and the ml_models state from main
 from api.state import ml_models # <-- Import from the neutral state file
-from api.core.document_processor import download_document, process_document, chunk_text
+from api.core.document_processor import download_document, optimized_semantic_chunk_text, process_document
 from api.core.vector_store import RequestKnowledgeBase
 from api.core.agent_logic import answer_question_with_agent # <-- Updated import
 import time
 # --- Router and Pydantic Models (Unchanged) ---
 hackrx_router = APIRouter(prefix="/hackrx")
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class RunRequest(BaseModel):
     documents: str = Field(..., description="URL of the PDF document to process.")
@@ -51,10 +53,17 @@ async def run_submission(request: RunRequest = Body(...)):
         # Offload CPU-bound operations
         document_text = await process_document(request.documents, document_bytes)
 
-        chunks = await asyncio.to_thread(chunk_text, document_text)
+        # Use semantic chunking instead of simple chunking
+        chunks = await optimized_semantic_chunk_text(
+            document_text, 
+            embedding_model,
+            min_chunk_size=800,
+            max_chunk_size=1200, 
+            similarity_threshold=0.3
+        )
         t1 = time.perf_counter()
         print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")
-        
+
         t2 = time.perf_counter()
         knowledge_base = RequestKnowledgeBase(embedding_model)
         knowledge_base.build(chunks)

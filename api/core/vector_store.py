@@ -54,7 +54,6 @@ class RequestKnowledgeBase:
         """
         if self.faiss_index is None or self.bm25_index is None:
             raise ValueError("Knowledge base has not been built yet.")
-        query = "search_query: " + query
         print(f"Performing hybrid search for query: '{query}'")
 
         # --- 1. Keyword Search (BM25) ---
