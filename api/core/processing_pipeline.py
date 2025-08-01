@@ -14,7 +14,7 @@ class OptimizedPipeline:
         chunks = await fast_semantic_chunk_text(
             document_text, 
             self.embedding_manager,
-            target_chunk_size=1000
+            target_chunk_size=800
         )
         
         # Build knowledge base (GPU accelerated)

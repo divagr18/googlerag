@@ -65,7 +65,7 @@ async def run_submission(request: RunRequest = Body(...)):
         chunks = await optimized_semantic_chunk_text(
             document_text, 
             manager, # Pass the whole manager
-            target_chunk_size=1200, 
+            target_chunk_size=800, 
         )
         t1 = time.perf_counter()
         print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")

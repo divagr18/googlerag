@@ -116,7 +116,7 @@ def _cluster_and_chunk(
 async def optimized_semantic_chunk_text(
     text: str, 
     embedding_model: OptimizedEmbeddingManager, 
-    target_chunk_size: int = 1500
+    target_chunk_size: int = 800
 ) -> List[str]:
     """
     This is the single, unified chunking strategy.
