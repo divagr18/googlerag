@@ -32,3 +32,4 @@ dist
 .venv*
 venv*
 milvus/volumes/milvus/etcd/member/snap/db
+qa_log.log

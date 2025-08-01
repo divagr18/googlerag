@@ -69,3 +69,5 @@ Traceback (most recent call last):
     print(f"Total processing time: {end - start:.2f} seconds")
                                           ^^^^^
 NameError: name 'start' is not defined
+2025-08-02 01:52:49,657 - Q: What is the waiting period for cataract surgery? | A: The waiting period for cataract surgery is two years. This period applies to specific diseases and procedures and coverage begins after this time, assuming the condition is not pre-existing. If the insured person has continuous coverage without a break, the waiting period may be reduced based on prior coverage.
+2025-08-02 01:52:49,657 - Q: What is the extent of coverage for AYUSH treatments? | A: AYUSH treatments, encompassing Ayurveda, Yoga and Naturopathy, Unani, Siddha, and Homeopathy systems, are covered for inpatient care up to the Sum Insured. For coverage, these treatments must be received at a qualified AYUSH Hospital that meets specific criteria, including having at least 5 in-patient beds and a qualified AYUSH Medical Practitioner available round the clock.
