@@ -3,19 +3,29 @@ import os
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from typing import List
+import time
+import logging
 
-# Import our core logic and the ml_models state from main
-from api.state import ml_models # <-- Import from the neutral state file
+# --- Logger Configuration (Correct and Unchanged) ---
+qa_logger = logging.getLogger('qa_logger')
+qa_logger.setLevel(logging.INFO)
+file_handler = logging.FileHandler('qa_log.log', mode='a')
+file_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(message)s')
+file_handler.setFormatter(formatter)
+if not qa_logger.handlers:
+    qa_logger.addHandler(file_handler)
+
+# --- Imports (Unchanged) ---
+from api.state import ml_models
 from api.core.document_processor import download_document, optimized_semantic_chunk_text, process_document
 from api.core.vector_store import RequestKnowledgeBase
-from api.core.agent_logic import answer_question_with_agent # <-- Updated import
-import time
-# --- Router and Pydantic Models (Unchanged) ---
+from api.core.agent_logic import answer_question_with_agent
+
+# --- Router and Models (Unchanged) ---
 hackrx_router = APIRouter(prefix="/hackrx")
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class RunRequest(BaseModel):
     documents: str = Field(..., description="URL of the PDF document to process.")
@@ -41,19 +51,18 @@ async def run_submission(request: RunRequest = Body(...)):
     """
     start = time.perf_counter()
 
-    embedding_model = ml_models.get("embedding_model")
-    if not embedding_model:
-        raise HTTPException(status_code=503, detail="Embedding model is not ready.")
+    manager = ml_models.get("embedding_manager")
+    if not manager:
+        raise HTTPException(status_code=503, detail="Embedding manager is not ready.")
+
+    embedding_model = manager.model
 
     try:
         t0 = time.perf_counter()
-        # Phase 1: Build the Knowledge Base (once per request)
         print(f"Processing document from: {request.documents}")
         document_bytes = await download_document(request.documents)
-        # Offload CPU-bound operations
         document_text = await process_document(request.documents, document_bytes)
 
-        # Use semantic chunking instead of simple chunking
         chunks = await optimized_semantic_chunk_text(
             document_text, 
             embedding_model,
@@ -68,9 +77,6 @@ async def run_submission(request: RunRequest = Body(...)):
         t3 = time.perf_counter()
         print(f"Embedding & FAISS Indexing took {t3 - t2:.2f} seconds")
         
-        # Phase 2: Run Parallel Agent Tasks
-        # Create a list of concurrent tasks, one for each question.
-        # Each task will run our agent logic with the shared knowledge base.
         t4 = time.perf_counter()
         tasks = [
             answer_question_with_agent(question, knowledge_base)
@@ -83,6 +89,14 @@ async def run_submission(request: RunRequest = Body(...)):
         t5 = time.perf_counter()
         print(f"⏱️ Parallel Agent Execution took: {t5 - t4:.4f} seconds.")
 
+        print("Logging Q&A pairs to qa_log.log...")
+        for question, answer in zip(request.questions, answers):
+            # --- THIS IS THE FIX ---
+            # 1. Clean the answer string first and store it in a variable.
+            cleaned_answer = answer.replace('\n', ' ')
+            # 2. Use the clean variable in the f-string.
+            qa_logger.info(f"Q: {question} | A: {cleaned_answer}")
+        
         end = time.perf_counter()
         print(f"Total processing time: {end - start:.2f} seconds")
         return RunResponse(answers=answers)
@@ -90,4 +104,5 @@ async def run_submission(request: RunRequest = Body(...)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        qa_logger.error(f"An internal error occurred: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")

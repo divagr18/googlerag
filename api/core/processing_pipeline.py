@@ -1,5 +1,5 @@
 from .embedding_manager import OptimizedEmbeddingManager
-from .document_processor import fast_semantic_chunk_text
+from .document_processor import optimized_semantic_chunk_text as fast_semantic_chunk_text
 from .vector_store import RequestKnowledgeBase
 from .agent_logic import answer_question_with_agent
 

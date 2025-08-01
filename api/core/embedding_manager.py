@@ -12,11 +12,11 @@ class OptimizedEmbeddingManager:
         self.batch_size = 64 if self.device == "cuda" else 16
         
         # Use faster, smaller model optimized for your GPU
-        model_name = "all-MiniLM-L6-v2"  # 22MB, very fast on RTX 4060
+        model_name = "nomic-ai/nomic-embed-text-v1.5"  # 22MB, very fast on RTX 4060
         # Alternative: "paraphrase-MiniLM-L3-v2" for even faster processing
         
         print(f"Loading embedding model on {self.device}")
-        self.model = SentenceTransformer(model_name, device=self.device)
+        self.model = SentenceTransformer(model_name, device=self.device,trust_remote_code=True)
         
         # Optimize for inference
         if self.device == "cuda":

@@ -119,12 +119,18 @@ def smart_paragraph_split(text: str) -> List[str]:
 async def batch_encode_gpu_optimized(texts: List[str], model) -> np.ndarray:
     """GPU-optimized batch encoding for RTX 4060"""
     batch_size = 32 if len(texts) > 50 else 16
-    return model.encode(
+    
+    # Generate the embeddings
+    embeddings = model.encode(
         texts, batch_size=batch_size, show_progress_bar=False,
         convert_to_numpy=True, normalize_embeddings=True,
         device='cuda' if hasattr(model, 'device') else None
     )
-
+    
+    # --- ADD THIS LINE ---
+    print(f"ℹ️  [Chunking] Generated embeddings: Shape={embeddings.shape}, DType={embeddings.dtype}")
+    
+    return embeddings
 def simple_split_chunk(text: str, max_size: int) -> List[str]:
     """Simple chunk splitting for large texts"""
     if len(text) <= max_size: return [text]

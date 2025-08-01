@@ -1,37 +1,36 @@
-# main.py (or app/main.py)
 import os
+os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 import torch
-from sentence_transformers import SentenceTransformer
 
 from api.routes.v1_router import v1_router
 from api.settings import api_settings
 from api.state import ml_models  # <-- Import from the neutral state file
+from .core.embedding_manager import OptimizedEmbeddingManager
 
-
-# A simple dictionary to hold the loaded model
+# A simple dictionary to hold the loaded model manager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("--- Server starting up ---")
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Using device: {device}")
-    
-    model_name = 'all-MiniLM-L6-v2'
-    print(f"Loading embedding model '{model_name}'...")
-    # Corrected: Removed unnecessary and potentially insecure trust_remote_code=True
-    model = SentenceTransformer(model_name, device=device)
-    model.max_seq_length = 512  # optional
-    ml_models["embedding_model"] = model
-    print("✅ Embedding model loaded successfully.")
+
+    # Instantiate the optimized embedding manager
+    manager = OptimizedEmbeddingManager()
+    print(f"Embedding manager initialized on device: {manager.device}")
+
+    # Store manager in shared state
+    ml_models["embedding_manager"] = manager
+    print("✅ Embedding manager loaded successfully.")
     print(ml_models)
 
     yield
 
     print("--- Server shutting down ---")
     ml_models.clear()
+
 
 def create_app() -> FastAPI:
     """Create a FastAPI App"""
@@ -41,10 +40,10 @@ def create_app() -> FastAPI:
         docs_url="/docs" if api_settings.docs_enabled else None,
         redoc_url="/redoc" if api_settings.docs_enabled else None,
         openapi_url="/openapi.json" if api_settings.docs_enabled else None,
-        lifespan=lifespan  # <-- ADD THIS LIFESPAN MANAGER
+        lifespan=lifespan  # <-- Use the new lifespan manager
     )
 
-    app.include_router(v1_router,prefix="/api")
+    app.include_router(v1_router, prefix="/api")
 
     app.add_middleware(
         CORSMiddleware,
@@ -54,5 +53,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     return app
+
 
 app = create_app()
