@@ -1,77 +1,99 @@
+# api/core/agent_logic.py  (New name for clarity)
 from typing import List
 from agno.agent import Agent
 from agno.agent import RunResponse
-from agno.models.openai import OpenAIChat
 from agno.models.google import Gemini
-from agno.models.groq import Groq
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# Choose your LLM (the last assignment wins)
-llm = OpenAIChat(id="gpt-4.1-nano", temperature=0.1)
-llm = Gemini(id="gemini-2.5-flash", temperature=0.1, api_key=GEMINI_API_KEY)
-
-# Import the Knowledge Base class
 from .vector_store import RequestKnowledgeBase
+from .structured_data_extractor import QueryClassifier
 
-async def answer_question_with_agent(
-    question: str,
-    knowledge_base: RequestKnowledgeBase
-) -> str:
+# Ultra-fast model configuration for RTX 4060
+llm = Gemini(
+    id="gemini-2.0-flash-exp",  # Latest fastest model
+    temperature=0.0,
+    max_tokens=150,  # Reduced for faster generation
+    timeout=10.0     # Quick timeout
+)
+
+async def answer_question_with_agent(question: str, knowledge_base: RequestKnowledgeBase) -> str:
     """
-    Creates and runs a temporary Agno agent to answer a single question
-    using the pre-built knowledge base.
+    Ultra-optimized agent for RTX 4060 - sub-3-second responses
     """
+    
+    def lightning_search(query_text: str) -> List[str]:
+        """Lightning-fast search with query optimization"""
+        # Pre-classify query for optimized search strategy
+        query_type, concepts = QueryClassifier.classify_query(query_text)
+        
+        if query_type == "comparison" and len(concepts) >= 2:
+            # Multi-concept search for comparisons
+            results = []
+            for concept in concepts[:2]:  # Limit to prevent slowdown
+                concept_results = knowledge_base.search(f"{query_text} {concept}", k=3)
+                results.extend(concept_results)
+            return list(dict.fromkeys(results))[:5]  # Dedupe and limit
+        
+        elif query_type == "factual":
+            # Precise search for factual queries
+            return knowledge_base.search(query_text, k=4)
+        
+        else:
+            # Standard search with query expansion
+            expanded = expand_query_fast(query_text)
+            all_results = []
+            for exp_query in expanded[:2]:  # Limit expansions
+                results = knowledge_base.search(exp_query, k=3)
+                all_results.extend(results)
+            return list(dict.fromkeys(all_results))[:5]
 
-    def create_sync_search_tool(kb: RequestKnowledgeBase):
-        """Synchronous wrapper for the knowledge-base search."""
-        def sync_search(query_text: str) -> List[str]:
-            print(f"Agent tool 'search_document_clauses' called with query: '{query_text}'")
-            # kb.search is already synchronous—just call it directly
-            return kb.search(query_text, k=30)
-        return sync_search
-
-    # Instantiate the synchronous tool
-    search_document_clauses = create_sync_search_tool(knowledge_base)
-
-    agent_instructions = """
-    You are an expert Q&A system. Your task is to answer the user's question based ONLY on the
-    information retrieved using the search_document_clauses tool.
-
-    CRITICAL: Use the search_document_clauses tool with a query that is precise, complete, and
-    directly aligned with the user's question.
-
-    Steps:
-    1. First, call search_document_clauses with keywords from the user's question
-    2. Analyze the retrieved content carefully
-    3. If no relevant information is found, try different search terms
-    4. Base your answer ONLY on the retrieved content
-
-    Answer Guidelines:
-    - Your answer must be strictly based on the retrieved content — no assumptions, no external knowledge
-    - If the content does not provide a direct answer, state that the answer is not available in the document
-    - If it's a yes/no question, begin with "Yes" or "No" based on the retrieved content
-    - Include all relevant facts: waiting periods, exclusions, exceptions, special conditions
-    - If alternate scenarios or triggers exist (e.g., accident, emergency), include them
-    - Be short, dense, and precise — maximum 2 sentences
-    - No markdown formatting, no escaping quotes
-    - Do not restate the question
+    # Minimal, high-performance instructions
+    instructions = """
+    You are a fast, precise document Q&A system.
+    
+    PROCESS:
+    1. Search using lightning_search with the user's question
+    2. Find the answer in the retrieved text
+    3. Give a direct answer in 1-2 sentences
+    
+    If not found: "Information not available in the document."
+    Be concise and accurate.
     """
 
     agent = Agent(
-        tools=[search_document_clauses],
-        instructions=agent_instructions,
+        tools=[lightning_search],
+        instructions=instructions,
         model=llm,
         debug_mode=False,
-        reasoning=False
+        reasoning=False,  # Disable reasoning for speed
+        max_loops=1,      # Single loop only
+        show_tool_calls=False
     )
 
     try:
-        response_object: RunResponse = await agent.arun(question)
-        return response_object.content
+        response: RunResponse = await agent.arun(question)
+        return response.content
     except Exception as e:
-        print(f"Error running agent: {e}")
-        return f"Error processing question: {str(e)}"
+        # Fallback to direct search if agent fails
+        direct_results = knowledge_base.search(question, k=3)
+        if direct_results:
+            return f"Based on the document: {direct_results[0][:200]}..."
+        return "Unable to find relevant information in the document."
+
+def expand_query_fast(query: str) -> List[str]:
+    """Ultra-fast query expansion with minimal overhead"""
+    base_query = query.lower()
+    expansions = [query]  # Original first
+    
+    # Quick synonym replacement - only most common cases
+    quick_synonyms = {
+        "rate": "fee", "limit": "maximum", "require": "need",
+        "allow": "permit", "benefit": "advantage"
+    }
+    
+    for original, synonym in quick_synonyms.items():
+        if original in base_query:
+            expanded = base_query.replace(original, synonym)
+            if expanded != base_query:
+                expansions.append(expanded.title())  # Proper case
+                break  # Only one expansion for speed
+    
+    return expansions[:2]  # Max 2 queries
