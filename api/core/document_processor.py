@@ -8,14 +8,19 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from urllib.parse import urlparse
-import numpy as np
-from sklearn.cluster import MiniBatchKMeans
-from .embedding_manager import OptimizedEmbeddingManager # Import the manager
+import easyocr # Use the GPU-accelerated library
 
-# A single thread pool for all CPU-bound parsing tasks
+# --- Initialize the OCR reader once to load the model into GPU memory ---
+print("Initializing GPU-accelerated OCR Reader...")
+# This will automatically use the RTX 4060 if PyTorch with CUDA is installed.
+OCR_READER = easyocr.Reader(['en'], gpu=True)
+print("✅ OCR Reader loaded successfully on GPU.")
+
+# Use a simple thread pool. The heavy work is on the GPU, not the CPU.
 cpu_executor = ThreadPoolExecutor(max_workers=os.cpu_count())
 
 async def download_document(url: str) -> bytes:
+    """Downloads a document from a URL."""
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(url, follow_redirects=True, timeout=30.0)
@@ -24,116 +29,84 @@ async def download_document(url: str) -> bytes:
         except httpx.RequestError as e:
             raise ValueError(f"Error downloading document from {url}: {e}")
 
-def _extract_text_from_pdf(pdf_bytes: bytes) -> str:
-    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-        return "".join(page.get_text() for page in doc)
+def _extract_text_from_pdf_sync(pdf_bytes: bytes) -> str:
+    """
+    Synchronous function to extract text. It attempts a fast digital extraction
+    and falls back to high-speed GPU OCR if the document is scanned.
+    """
+    # 1. Try the fast method for digitally native PDFs first.
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            digital_text = "".join(page.get_text() for page in doc)
+        # If we get a reasonable amount of text, we're done.
+        if len(digital_text.strip()) > 100:
+            print("INFO: Successfully extracted text from digitally native PDF.")
+            return digital_text
+    except Exception as e:
+        print(f"Digital extraction failed: {e}. Proceeding to OCR.")
+        digital_text = ""
 
-def extract_text_from_document_bytes(document_bytes: bytes, file_type: str) -> str:
-    if file_type == '.pdf':
-        return _extract_text_from_pdf(document_bytes)
-    # Add other file types like .docx if needed
-    else:
-        # Fallback for .txt or other text-based formats
-        return document_bytes.decode('utf-8', errors='ignore')
+    # 2. If digital text is minimal, it's a scanned PDF. Use GPU OCR.
+    print("WARN: Digital text extraction yielded minimal results. Switching to GPU-based OCR.")
+    full_ocr_text = []
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            for page_num, page in enumerate(doc):
+                print(f"Processing page {page_num + 1}/{len(doc)} with GPU OCR...")
+                # Render the page at a high resolution for better OCR quality.
+                pix = page.get_pixmap(dpi=300)
+                img_bytes = pix.tobytes("png")
+                
+                # easyocr reads the text from the image bytes.
+                # detail=0 and paragraph=True are optimized for speed and structure.
+                result = OCR_READER.readtext(img_bytes, detail=0, paragraph=True)
+                full_ocr_text.extend(result)
+    except Exception as ocr_error:
+        raise IOError(f"A critical error occurred during GPU OCR processing: {ocr_error}")
+
+    return "\n".join(full_ocr_text)
 
 async def process_document(url: str, document_bytes: bytes) -> str:
+    """
+    Asynchronously processes a document, offloading the extraction to a thread pool.
+    Returns the extracted text.
+    """
     path = urlparse(url).path
     file_type = os.path.splitext(path)[1].lower()
     if not file_type:
         raise ValueError("Could not determine file type from URL.")
 
+    if file_type != '.pdf':
+        return document_bytes.decode('utf-8', errors='ignore')
+
     loop = asyncio.get_event_loop()
+    # Run the synchronous extraction function in the executor.
     return await loop.run_in_executor(
         cpu_executor, 
-        extract_text_from_document_bytes, 
-        document_bytes, 
-        file_type
+        _extract_text_from_pdf_sync, 
+        document_bytes
     )
 
-# --- UNIFIED SEMANTIC CHUNKING STRATEGY ---
-
-def smart_paragraph_split(text: str) -> List[str]:
-    """Intelligent paragraph splitting optimized for legal/financial docs"""
-    paragraphs = text.split('\n\n')
-    result = []
-    for para in paragraphs:
-        para = para.strip()
-        if len(para) < 50:
-            if result and len(result[-1]) < 500:
-                result[-1] += ' ' + para
-            continue
-        
-        if len(para) > 2000:
-            sentences = re.split(r'(?<=[.!?])\s+', para)
-            current, current_len = [], 0
-            for sent in sentences:
-                if current_len + len(sent) > 1500 and current:
-                    result.append(' '.join(current))
-                    current, current_len = [sent], len(sent)
-                else:
-                    current.append(sent)
-                    current_len += len(sent)
-            if current:
-                result.append(' '.join(current))
-        else:
-            result.append(para)
-    return result
-
-def _cluster_and_chunk(
-    paragraphs: List[str], 
-    embedding_model: OptimizedEmbeddingManager, 
-    target_chunk_size: int
+def fast_sliding_window_chunker(
+    text: str, chunk_size: int, chunk_overlap: int
 ) -> List[str]:
     """
-    Synchronous helper function for clustering. To be run in an executor.
+    Extremely fast and simple text chunker using a sliding window.
+    This is the only chunking strategy you need.
     """
-    if not paragraphs:
+    if not text or not text.strip():
         return []
 
-    print(f"Starting semantic chunking on {len(paragraphs)} paragraphs...")
-    
-    # Embed all paragraphs using the centralized manager
-    paragraph_embeddings = embedding_model.encode_batch(paragraphs)
-    
-    # Cluster paragraphs to form semantic chunks
-    total_chars = sum(len(p) for p in paragraphs)
-    n_clusters = max(1, round(total_chars / target_chunk_size))
-    n_clusters = min(n_clusters, len(paragraphs))
+    text = re.sub(r'\s+', ' ', text).strip()
+    chunks = []
+    text_len = len(text)
+    i = 0
+    while i < text_len:
+        chunk = text[i : i + chunk_size]
+        chunks.append(chunk)
+        step = chunk_size - chunk_overlap
+        i += step
 
-    kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, n_init='auto', batch_size=256)
-    kmeans.fit(paragraph_embeddings)
-    
-    clustered_paragraphs = [[] for _ in range(n_clusters)]
-    for i, label in enumerate(kmeans.labels_):
-        clustered_paragraphs[label].append(paragraphs[i])
-        
-    chunks = ['\n\n'.join(cluster).strip() for cluster in clustered_paragraphs if cluster]
-    
-    final_chunks = [f"search_document: {chunk}" for chunk in chunks if chunk]
-    print(f"Successfully created {len(final_chunks)} semantic chunks.")
-    return final_chunks
-
-async def optimized_semantic_chunk_text(
-    text: str, 
-    embedding_model: OptimizedEmbeddingManager, 
-    target_chunk_size: int = 800
-) -> List[str]:
-    """
-    This is the single, unified chunking strategy.
-    It runs CPU-bound ML clustering in a thread pool to avoid blocking.
-    """
-    if not text.strip():
-        return []
-    
-    paragraphs = smart_paragraph_split(text)
-    if not paragraphs:
-        return []
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        cpu_executor,
-        _cluster_and_chunk,
-        paragraphs,
-        embedding_model,
-        target_chunk_size
-    )
+    prefixed_chunks = [f"search_document: {chunk.strip()}" for chunk in chunks if chunk.strip()]
+    print(f"Successfully created {len(prefixed_chunks)} fast chunks.")
+    return prefixed_chunks
