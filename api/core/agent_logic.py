@@ -13,8 +13,8 @@ GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # Initialize the LLM once
 llm = Gemini(
-    id="gemini-1.5-flash", # Corrected model ID
-    temperature=0.0, # Set to 0.0 for more deterministic query generation
+    id="gemini-2.5-flash", # Corrected model ID
+    temperature=0.1, # Set to 0.0 for more deterministic query generation
     api_key=GEMINI_API_KEY
 )
 
