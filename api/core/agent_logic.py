@@ -13,7 +13,7 @@ GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # Initialize the LLM once
 llm = Gemini(
-    id="gemini-2.5-flash",
+    id="gemini-1.5-flash", # Corrected model ID
     temperature=0.0, # Set to 0.0 for more deterministic query generation
     api_key=GEMINI_API_KEY
 )
@@ -85,26 +85,26 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
         print(f"⚡️ [Search] Running Detailed Search for: '{specific_query}'")
         return await lightning_search(specific_query)
 
-    # --- 3. NEW: Update instructions to use the three parallel tools ---
-    instructions = """You are an expert Q&A system. Your primary goal is to answer the user's question accurately and relevantly based ONLY on the provided search results.
+    # --- 3. FIX: Update instructions to be more concise and handle edge cases ---
+    instructions = """You are an expert Q&A system. Your goal is to answer questions accurately and concisely based ONLY on the provided search results.
 
-    If their query is something like code generation, skip the query generation and directly provide the code snippet.
+**CRITICAL RULES:**
+1.  If a user asks for something that cannot be in a document (e.g., "write code", "generate a javascript function"), you MUST respond with: "I cannot answer this question as it is outside the scope of document analysis." Do not use the search tools or any other rule.
+2.  Your final answer MUST be 2-3 sentences maximum. Be direct and to the point.
 
 **Query Generation Rules:**
-You MUST use all three search tools in parallel. Generate three distinct queries based on the user's question:
-1.  `search_direct`: A short, keyword-focused query (3-6 words). Example: "Article 12 State definition".
-2.  `search_rephrased`: A full question that rephrases the user's intent. Example: "How is the term 'State' defined for fundamental rights?".
-3.  `search_detailed`: A specific question asking for details, lists, or exceptions. Example: "What specific entities are included in the definition of 'State' under Article 12?".
+For all other questions, you MUST use all three search tools in parallel. Generate three distinct queries based on the user's question:
+1.  `search_direct`: A short, keyword-focused query.
+2.  `search_rephrased`: A full question that rephrases the user's intent.
+3.  `search_detailed`: A specific question asking for details or lists.
 
 **Answer Synthesis Rules:**
 After receiving the search results, you MUST follow these rules to generate your final answer:
-1.  **Answer the Core Question:** Directly address the user's question. Your main priority is to provide the information they asked for.
-2.  **Be Relevant, Not Verbose:** Answer in 2-3 clear and focused sentences. Do not include information that is related but not directly asked for.
-3.  **Synthesize, Don't Just State "Not Found":**
-    - If the search results contain information that *partially* or *indirectly* answers the question, synthesize a helpful response based on what IS available.
-    - **Example:** If asked "Is an arrest without a warrant legal?", and the text only describes the rights of an arrested person, a good answer is: "The document does not state whether an arrest without a warrant is legal, but it outlines the rights of an arrested person, such as the right to be informed of the grounds for arrest and to be produced before a magistrate within 24 hours."
-    - Only if the search results are completely irrelevant to the question, respond with: "Information not available in the document."
-4.  **Handle "Yes/No" Questions:** Begin your answer with "Yes," or "No," followed by a concise explanation based on the context.
+1.  **Synthesize, Don't Quote:** Combine information from the search results to form a coherent answer. Do not just copy-paste long passages.
+2.  **Handle Missing Information:**
+    - If search results partially answer the question, explain what is available in a brief, helpful way (e.g., "The document does not state X, but it does mention Y.").
+    - If search results are completely irrelevant, respond ONLY with: "Information not available in the document."
+3.  **Handle "Yes/No" Questions:** Start your answer with "Yes," or "No," followed by a brief, one-sentence explanation based on the context.
 """
 
     # --- 4. Configure the agent with the new parallel tools ---
