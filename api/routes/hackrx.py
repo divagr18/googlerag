@@ -53,7 +53,8 @@ async def run_submission(request: RunRequest = Body(...)):
     if not manager:
         raise HTTPException(status_code=503, detail="Embedding manager is not ready.")
 
-    embedding_model = manager.model
+    # The embedding model is now accessed via the manager inside other functions
+    # embedding_model = manager.model # No longer needed here
 
     try:
         t0 = time.perf_counter()
@@ -63,15 +64,14 @@ async def run_submission(request: RunRequest = Body(...)):
 
         chunks = await optimized_semantic_chunk_text(
             document_text, 
-            embedding_model,
-            target_chunk_size=800, 
+            manager, # Pass the whole manager
+            target_chunk_size=1200, 
         )
         t1 = time.perf_counter()
         print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")
 
-        t2 = time.perf_counter()
-        knowledge_base = RequestKnowledgeBase(embedding_model)
-        knowledge_base.build(chunks)
+        knowledge_base = RequestKnowledgeBase(manager) # Pass the whole manager
+        await knowledge_base.build(chunks) # Await the async build method
         
         t4 = time.perf_counter()
         tasks = [
@@ -86,10 +86,7 @@ async def run_submission(request: RunRequest = Body(...)):
 
         print("Logging Q&A pairs to qa_log.log...")
         for question, answer in zip(request.questions, answers):
-            # --- THIS IS THE FIX ---
-            # 1. Clean the answer string first and store it in a variable.
             cleaned_answer = answer.replace('\n', ' ')
-            # 2. Use the clean variable in the f-string.
             qa_logger.info(f"Q: {question} | A: {cleaned_answer}")
         
         end = time.perf_counter()
