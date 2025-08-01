@@ -61,3 +61,11 @@ Traceback (most recent call last):
     chunks = await optimized_semantic_chunk_text(
                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 TypeError: optimized_semantic_chunk_text() got an unexpected keyword argument 'max_chunk_size'
+2025-08-02 01:51:03,282 - Q: What is the waiting period for cataract surgery? | A: There is a two-year waiting period for cataract surgery. If cataract surgery is considered a pre-existing disease, the longer of the two waiting periods (pre-existing disease or specified procedure) will apply. However, continuous coverage without a break may reduce this waiting period.
+2025-08-02 01:51:03,282 - Q: What is the extent of coverage for AYUSH treatments? | A: AYUSH treatments, encompassing Ayurveda, Yoga and Naturopathy, Unani, Siddha, and Homeopathy systems, are covered up to the Sum Insured (SI) for inpatient care. This coverage applies when treatment is received in a qualified AYUSH Hospital that meets specific criteria, such as having at least 5 in-patient beds and a qualified AYUSH Medical Practitioner available round the clock.
+2025-08-02 01:51:03,282 - An internal error occurred: name 'start' is not defined
+Traceback (most recent call last):
+  File "D:\agent-api\api\routes\hackrx.py", line 93, in run_submission
+    print(f"Total processing time: {end - start:.2f} seconds")
+                                          ^^^^^
+NameError: name 'start' is not defined

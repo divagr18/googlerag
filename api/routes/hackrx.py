@@ -90,7 +90,7 @@ async def run_submission(request: RunRequest = Body(...)):
             qa_logger.info(f"Q: {question} | A: {cleaned_answer}")
         
         end = time.perf_counter()
-        print(f"Total processing time: {end - start:.2f} seconds")
+        print(f"Total processing time: {end - start_time:.2f} seconds")
         return RunResponse(answers=answers)
 
     except ValueError as e:
