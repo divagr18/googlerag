@@ -34,7 +34,6 @@ class RunRequest(BaseModel):
 class RunResponse(BaseModel):
     answers: List[str]
 
-# --- Authentication (Unchanged) ---
 auth_scheme = HTTPBearer()
 EXPECTED_TOKEN = "7bf4409966a1479a8578f3258eba4e215cef0f7ccd694a2440149c1eeb4874ef"
 
@@ -43,13 +42,12 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(auth_scheme
         raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
     return credentials
 
-# --- Main Endpoint ---
 @hackrx_router.post("/run", response_model=RunResponse, dependencies=[Depends(verify_token)])
 async def run_submission(request: RunRequest = Body(...)):
     """
-    Processes a document and answers questions using parallel Agno agents.
+    Processes a document and answers questions using a streamlined, optimized pipeline.
     """
-    start = time.perf_counter()
+    start_time = time.perf_counter()
 
     manager = ml_models.get("embedding_manager")
     if not manager:
@@ -74,8 +72,6 @@ async def run_submission(request: RunRequest = Body(...)):
         t2 = time.perf_counter()
         knowledge_base = RequestKnowledgeBase(embedding_model)
         knowledge_base.build(chunks)
-        t3 = time.perf_counter()
-        print(f"Embedding & FAISS Indexing took {t3 - t2:.2f} seconds")
         
         t4 = time.perf_counter()
         tasks = [
@@ -83,7 +79,6 @@ async def run_submission(request: RunRequest = Body(...)):
             for question in request.questions
         ]
         
-        print(f"Spawning {len(request.questions)} Agno agents in parallel...")
         answers = await asyncio.gather(*tasks)
         print("✅ All agent tasks completed.")
         t5 = time.perf_counter()

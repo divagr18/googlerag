@@ -1,3 +1,4 @@
+# api/core/vector_store.py
 import numpy as np
 import faiss
 from typing import List, Dict
@@ -16,6 +17,7 @@ class RequestKnowledgeBase:
         self.cache: Dict[str, List[str]] = {}
 
     def build(self, chunks: List[str]):
+        """Builds a CPU-based FAISS index."""
         if not chunks:
             raise ValueError("Cannot build knowledge base from empty chunks.")
         
@@ -74,11 +76,12 @@ class RequestKnowledgeBase:
         return final_embeddings
 
     def search(self, query: str, k: int = 5) -> List[str]:
+        """Performs a search on the CPU index and uses an efficient FIFO cache."""
         cache_key = f"{query}_{k}"
         if cache_key in self.cache:
             return self.cache[cache_key]
-        
-        if self.faiss_index is None or self.bm25_index is None:
+
+        if self.faiss_index is None:
             raise ValueError("Knowledge base not built yet.")
 
         search_k = min(k * 2, len(self.chunks), 20)
