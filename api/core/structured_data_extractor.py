@@ -32,11 +32,8 @@ class QueryClassifier:
         Returns: (query_type, key_concepts)
         """
         query_lower = query.lower()
-        
-        # Extract key concepts (nouns and important terms)
         concepts = cls._extract_concepts(query_lower)
         
-        # Classify query type
         if any(re.search(pattern, query_lower) for pattern in cls.COMPARISON_PATTERNS):
             return "comparison", concepts
         elif any(re.search(pattern, query_lower) for pattern in cls.CONDITIONAL_PATTERNS):
@@ -49,7 +46,6 @@ class QueryClassifier:
     @classmethod
     def _extract_concepts(cls, query: str) -> List[str]:
         """Extract key concepts from query"""
-        # Remove common stop words and extract meaningful terms
         stop_words = {
             'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
             'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through', 'during',
@@ -58,10 +54,8 @@ class QueryClassifier:
             'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can'
         }
         
-        # Extract words that are likely to be important concepts
         words = re.findall(r'\b[a-zA-Z]{3,}\b', query)
         concepts = []
-        
         for word in words:
             word_lower = word.lower()
             if (word_lower not in stop_words and 
@@ -69,32 +63,6 @@ class QueryClassifier:
                 not word_lower in ['what', 'how', 'when', 'where', 'why', 'who']):
                 concepts.append(word_lower)
         
-        return concepts[:5]  # Return top 5 concepts
+        return concepts[:5]
 
-# Additional utility functions for structured data extraction
-class DocumentAnalyzer:
-    """Utility class for document structure analysis"""
-    
-    @staticmethod
-    def extract_structured_elements(text: str) -> dict:
-        """Extract structured elements like tables, lists, etc."""
-        elements = {
-            'tables': [],
-            'lists': [],
-            'sections': [],
-            'key_terms': []
-        }
-        
-        # Extract numbered lists
-        list_pattern = r'^\s*(?:\d+\.|\*|-)\s+(.+)$'
-        elements['lists'] = re.findall(list_pattern, text, re.MULTILINE)
-        
-        # Extract section headers
-        header_pattern = r'^[A-Z][A-Z\s]{10,}$'
-        elements['sections'] = re.findall(header_pattern, text, re.MULTILINE)
-        
-        # Extract percentage/rate patterns
-        rate_pattern = r'\b\d+(?:\.\d+)?%|\b\d+(?:\.\d+)?\s*(?:percent|rate|fee)\b'
-        elements['key_terms'] = re.findall(rate_pattern, text, re.IGNORECASE)
-        
-        return elements
+# Removed the unused DocumentAnalyzer class

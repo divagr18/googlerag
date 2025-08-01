@@ -21,7 +21,8 @@ async def lifespan(app: FastAPI):
     
     model_name = 'all-MiniLM-L6-v2'
     print(f"Loading embedding model '{model_name}'...")
-    model = SentenceTransformer(model_name, device=device,trust_remote_code=True)
+    # Corrected: Removed unnecessary and potentially insecure trust_remote_code=True
+    model = SentenceTransformer(model_name, device=device)
     model.max_seq_length = 512  # optional
     ml_models["embedding_model"] = model
     print("✅ Embedding model loaded successfully.")
