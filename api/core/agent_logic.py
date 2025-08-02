@@ -23,7 +23,6 @@ llm = Gemini(
 query_enhancer_llm = OpenAIChat(
     id="gpt-4.1-mini",
     temperature=0.2,  # More deterministic for query generation
-    api_key=GEMINI_API_KEY
 )
 
 async def enhance_query_with_llm(original_query: str, query_type: str) -> Dict[str, str]:
@@ -176,7 +175,7 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
 **CRITICAL RULES:**
 1. If a user asks for something that cannot be in a document (e.g., "write code", "generate a javascript function"), you MUST respond with: "I cannot answer this question as it is outside the scope of document analysis." Do not use the search tools.
 
-2. **Answer Quality Priority**: Provide complete, accurate answers. You must however limit yourself to 2-3 sentences per answer, but ensure you cover all relevant aspects of the question.
+2. **Answer Quality Priority**: Provide complete, accurate answers. MUST MENTION EXACT CLAUSES ETC WHEREVER APPLICABLE. You must however limit yourself to 2-3 sentences per answer, but ensure you cover all relevant aspects of the question.
 
 **Query Generation Rules:**
 For document-related questions, you MUST use all three search tools in parallel, concurrently:
