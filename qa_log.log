@@ -342,3 +342,15 @@ TypeError: optimized_semantic_chunk_text() got an unexpected keyword argument 't
 2025-08-02 16:27:46,156 - Q: In what way does Newton's notion of absolute space and time differ from relative motion, and how does it support his laws? | A: Newton's concept of absolute time is a "true" and "mathematical" duration that flows equably without external regard, while relative time is a sensible, external measure of this duration, like hours or days. Similarly, absolute space is inherently immovable and similar, whereas relative space is a movable dimension determined by our senses in relation to bodies. Absolute motion is the translation of a body from one absolute place to another, distinct from relative motion, which is a translation from one relative place to another.  This distinction is crucial for Newton's laws because true, absolute motion is generated or altered only by impressed forces, unlike relative motion which can change without a force on the body itself if the reference frame changes. This allows for a consistent framework where the effects of forces, such as the forces of receding from the axis in circular motion, are attributed to absolute motion, thereby supporting his laws of motion which are based on these impressed forces.
 2025-08-02 16:27:46,156 - Q: Who was the grandfather of Isaac Newton? | A: Isaac Newton's grandfather was Robert Newton. His lineage beyond Robert Newton cannot be traced with certainty.
 2025-08-02 16:27:46,156 - Q: Do we know any other descent of Isaac Newton apart from his grandfather? | A: No, beyond his grandfather, Robert Newton, the descent of Sir Isaac Newton cannot be traced with certainty. While there were family traditions of Scottish extraction or origins from Newton, Lancashire, these remain unconfirmed. Isaac Newton himself was a posthumous child, born after his father, John Newton, died.
+2025-08-02 16:36:32,669 - An internal error occurred: fast_sliding_window_chunker() missing 1 required positional argument: 'chunk_overlap'
+Traceback (most recent call last):
+  File "D:\agent-api\api\routes\hackrx.py", line 63, in run_submission
+    chunks = await optimized_semantic_chunk_text(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: fast_sliding_window_chunker() missing 1 required positional argument: 'chunk_overlap'
+2025-08-02 16:37:53,533 - An internal error occurred: object list can't be used in 'await' expression
+Traceback (most recent call last):
+  File "D:\agent-api\api\routes\hackrx.py", line 63, in run_submission
+    chunks = await optimized_semantic_chunk_text(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: object list can't be used in 'await' expression
