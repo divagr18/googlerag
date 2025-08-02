@@ -53,10 +53,8 @@ async def run_submission(request: RunRequest = Body(...)):
     if not manager:
         raise HTTPException(status_code=503, detail="Embedding manager is not ready.")
 
-    # The embedding model is now accessed via the manager inside other functions
-    # embedding_model = manager.model # No longer needed here
-
     try:
+        # --- Phase 1: Document Processing and KB Build (Now highly parallel) ---
         t0 = time.perf_counter()
         print(f"Processing document from: {request.documents}")
         document_bytes = await download_document(request.documents)
@@ -64,26 +62,31 @@ async def run_submission(request: RunRequest = Body(...)):
 
         chunks = await optimized_semantic_chunk_text(
             document_text, 
-            manager, # Pass the whole manager
-            target_chunk_size=800, 
+            manager # Pass the whole manager
         )
         t1 = time.perf_counter()
         print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")
 
-        knowledge_base = RequestKnowledgeBase(manager) # Pass the whole manager
-        await knowledge_base.build(chunks) # Await the async build method
+        t2 = time.perf_counter()
+        knowledge_base = RequestKnowledgeBase(manager)
+        await knowledge_base.build(chunks) # Await the new parallel build method
+        t3 = time.perf_counter()
+        print(f"KB Indexing took {t3 - t2:.2f} seconds.")
         
+        # --- Phase 2: Agent Execution (Unchanged) ---
         t4 = time.perf_counter()
         tasks = [
             answer_question_with_agent(question, knowledge_base)
             for question in request.questions
         ]
         
+        print(f"Spawning {len(request.questions)} Agno agents in parallel...")
         answers = await asyncio.gather(*tasks)
         print("✅ All agent tasks completed.")
         t5 = time.perf_counter()
         print(f"⏱️ Parallel Agent Execution took: {t5 - t4:.4f} seconds.")
 
+        # --- Phase 3: Logging and Response (Unchanged) ---
         print("Logging Q&A pairs to qa_log.log...")
         for question, answer in zip(request.questions, answers):
             cleaned_answer = answer.replace('\n', ' ')
