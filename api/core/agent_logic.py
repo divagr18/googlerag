@@ -115,17 +115,49 @@ def generate_fallback_queries(original_query: str, query_type: str) -> Dict[str,
             'contextual': expanded_queries[1] if len(expanded_queries) > 1 else f"{original_query} context"
         }
 
-async def answer_question_with_agent(question: str, knowledge_base: RequestKnowledgeBase) -> str:
+async def prepare_enhanced_queries_for_all_questions(questions: List[str]) -> List[Dict[str, str]]:
     """
-    Uses an agent with LLM-enhanced queries for maximum accuracy.
+    Pre-process all questions to generate enhanced queries in parallel.
+    Returns a list of enhanced query dictionaries for each question.
+    """
+    print(f"🚀 Pre-processing {len(questions)} questions for enhanced queries...")
+    
+    async def process_single_question(question: str) -> Dict[str, str]:
+        query_type, concepts = QueryClassifier.classify_query(question)
+        enhanced_queries = await enhance_query_with_llm(question, query_type)
+        print(f"✅ Enhanced queries for '{question[:50]}...': {query_type}")
+        return {
+            'question': question,
+            'query_type': query_type,
+            'concepts': concepts,
+            'enhanced_queries': enhanced_queries
+        }
+    
+    # Process all questions in parallel
+    tasks = [process_single_question(q) for q in questions]
+    results = await asyncio.gather(*tasks)
+    
+    print("🎯 All query enhancements completed!")
+    return results
+
+async def answer_question_with_agent(question: str, knowledge_base: RequestKnowledgeBase, 
+                                   precomputed_queries: Dict[str, str] = None) -> str:
+    """
+    Uses an agent with pre-computed enhanced queries for maximum performance.
     """
     
-    # Step 1: Classify query and enhance with LLM
-    query_type, concepts = QueryClassifier.classify_query(question)
-    enhanced_queries = await enhance_query_with_llm(question, query_type)
-    
-    print(f"🔍 Query type: {query_type}")
-    print(f"🚀 Enhanced queries: {enhanced_queries}")
+    # Use precomputed queries if available, otherwise compute on-the-fly
+    if precomputed_queries:
+        query_type = precomputed_queries['query_type']
+        concepts = precomputed_queries['concepts']
+        enhanced_queries = precomputed_queries['enhanced_queries']
+        print(f"🔄 Using precomputed queries for: {question[:50]}...")
+    else:
+        # Fallback to original behavior
+        query_type, concepts = QueryClassifier.classify_query(question)
+        enhanced_queries = await enhance_query_with_llm(question, query_type)
+        print(f"🔍 Query type: {query_type}")
+        print(f"🚀 Enhanced queries: {enhanced_queries}")
     
     async def lightning_search(query_text: str, search_type: str = "general") -> List[str]:
         """

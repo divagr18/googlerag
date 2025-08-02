@@ -22,7 +22,7 @@ if not qa_logger.handlers:
 from api.state import ml_models
 from api.core.document_processor import download_document, optimized_semantic_chunk_text, process_document
 from api.core.vector_store import RequestKnowledgeBase
-from api.core.agent_logic import answer_question_with_agent
+from api.core.agent_logic import answer_question_with_agent, prepare_enhanced_queries_for_all_questions
 
 # --- Router and Models (Unchanged) ---
 hackrx_router = APIRouter(prefix="/hackrx")
@@ -45,7 +45,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(auth_scheme
 @hackrx_router.post("/run", response_model=RunResponse, dependencies=[Depends(verify_token)])
 async def run_submission(request: RunRequest = Body(...)):
     """
-    Processes a document and answers questions using a streamlined, optimized pipeline.
+    Processes a document and answers questions using a streamlined, optimized pipeline with parallel processing.
     """
     start_time = time.perf_counter()
 
@@ -54,7 +54,7 @@ async def run_submission(request: RunRequest = Body(...)):
         raise HTTPException(status_code=503, detail="Embedding manager is not ready.")
 
     try:
-        # --- Phase 1: Document Processing and KB Build (Now highly parallel) ---
+        # --- Phase 1: Document Processing ---
         t0 = time.perf_counter()
         print(f"Processing document from: {request.documents}")
         document_bytes = await download_document(request.documents)
@@ -67,33 +67,48 @@ async def run_submission(request: RunRequest = Body(...)):
         t1 = time.perf_counter()
         print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")
 
+        # --- Phase 2: PARALLEL KB Building + Query Enhancement ---
         t2 = time.perf_counter()
+        print("🚀 Starting parallel KB building and query enhancement...")
+        
+        # Create knowledge base
         knowledge_base = RequestKnowledgeBase(manager)
-        await knowledge_base.build(chunks) # Await the new parallel build method
+        
+        # Run KB building and query enhancement in parallel
+        kb_build_task = knowledge_base.build(chunks)
+        query_enhancement_task = prepare_enhanced_queries_for_all_questions(request.questions)
+        
+        # Wait for both to complete
+        _, enhanced_query_data = await asyncio.gather(kb_build_task, query_enhancement_task)
+        
         t3 = time.perf_counter()
-        print(f"KB Indexing took {t3 - t2:.2f} seconds.")
+        print(f"✅ Parallel KB building + query enhancement completed in {t3 - t2:.2f} seconds.")
         
-        # --- Phase 2: Agent Execution (Unchanged) ---
+        # --- Phase 3: Optimized Agent Execution ---
         t4 = time.perf_counter()
-        tasks = [
-            answer_question_with_agent(question, knowledge_base)
-            for question in request.questions
-        ]
         
-        print(f"Spawning {len(request.questions)} Agno agents in parallel...")
+        # Create tasks with precomputed queries
+        tasks = []
+        for i, question in enumerate(request.questions):
+            precomputed_data = enhanced_query_data[i]
+            task = answer_question_with_agent(question, knowledge_base, precomputed_data)
+            tasks.append(task)
+        
+        print(f"🎯 Spawning {len(request.questions)} optimized agents with precomputed queries...")
         answers = await asyncio.gather(*tasks)
-        print("✅ All agent tasks completed.")
+        print("✅ All optimized agent tasks completed.")
         t5 = time.perf_counter()
-        print(f"⏱️ Parallel Agent Execution took: {t5 - t4:.4f} seconds.")
+        print(f"⚡️ Optimized Agent Execution took: {t5 - t4:.4f} seconds.")
 
-        # --- Phase 3: Logging and Response (Unchanged) ---
+        # --- Phase 4: Logging and Response ---
         print("Logging Q&A pairs to qa_log.log...")
         for question, answer in zip(request.questions, answers):
             cleaned_answer = answer.replace('\n', ' ')
             qa_logger.info(f"Q: {question} | A: {cleaned_answer}")
         
         end = time.perf_counter()
-        print(f"Total processing time: {end - start_time:.2f} seconds")
+        print(f"🏁 Total processing time: {end - start_time:.2f} seconds")
+        print(f"⚡️ Performance boost achieved through parallel processing!")
         return RunResponse(answers=answers)
 
     except ValueError as e:
