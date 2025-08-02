@@ -20,9 +20,10 @@ if not qa_logger.handlers:
 
 # --- Imports (Unchanged) ---
 from api.state import ml_models
-from api.core.document_processor import download_document, optimized_semantic_chunk_text, process_document
+from api.core.document_processor import stream_document, process_document_stream, optimized_semantic_chunk_text
 from api.core.vector_store import RequestKnowledgeBase
 from api.core.agent_logic import answer_question_with_agent, prepare_enhanced_queries_for_all_questions
+from api.core.embedding_manager import OptimizedEmbeddingManager
 
 # --- Router and Models (Unchanged) ---
 hackrx_router = APIRouter(prefix="/hackrx")
@@ -42,6 +43,42 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(auth_scheme
         raise HTTPException(status_code=401, detail="Invalid or missing authentication token")
     return credentials
 
+async def process_document_and_build_kb(
+    document_url: str, 
+    manager: OptimizedEmbeddingManager
+) -> RequestKnowledgeBase:
+    """
+    A single awaitable task that encapsulates the entire document processing pipeline,
+    using streaming to overlap download and processing.
+    """
+    pipeline_start_time = time.perf_counter()
+    print(f"PIPE-DOC: Starting full document pipeline for: {document_url}")
+    
+    # Step 1: Stream the document and process it in parallel
+    t0 = time.perf_counter()
+    doc_iterator = stream_document(document_url)
+    document_text = await process_document_stream(document_url, doc_iterator)
+    t1 = time.perf_counter()
+    print(f"PIPE-DOC: ⏱️ Streamed download & text extraction took: {t1 - t0:.2f}s")
+    
+    # Step 2: Chunk and get pre-computed embeddings
+    t2 = time.perf_counter()
+    chunks, precomputed_embeddings = await optimized_semantic_chunk_text(document_text, manager)
+    t3 = time.perf_counter()
+    print(f"PIPE-DOC: ⏱️ Semantic chunking (incl. embedding) took: {t3 - t2:.2f}s")
+    
+    # Step 3: Build Knowledge Base
+    t4 = time.perf_counter()
+    knowledge_base = RequestKnowledgeBase(manager)
+    if chunks:
+        await knowledge_base.build(chunks, precomputed_embeddings)
+    t5 = time.perf_counter()
+    print(f"PIPE-DOC: ⏱️ KB indexing (BM25 + FAISS) took: {t5 - t4:.2f}s")
+    
+    pipeline_end_time = time.perf_counter()
+    print(f"PIPE-DOC: ✅ Full document pipeline complete in {pipeline_end_time - pipeline_start_time:.2f}s.")
+    return knowledge_base
+
 @hackrx_router.post("/run", response_model=RunResponse, dependencies=[Depends(verify_token)])
 async def run_submission(request: RunRequest = Body(...)):
     """
@@ -54,53 +91,45 @@ async def run_submission(request: RunRequest = Body(...)):
         raise HTTPException(status_code=503, detail="Embedding manager is not ready.")
 
     try:
-        # --- Phase 1: Document Processing ---
+        # --- Phase 1: MAXIMALLY PARALLEL PREPARATION ---
         t0 = time.perf_counter()
-        print(f"Processing document from: {request.documents}")
-        document_bytes = await download_document(request.documents)
-        document_text = await process_document(request.documents, document_bytes)
+        print("🚀 Starting maximally parallel preparation: Document Pipeline vs. Query Enhancement")
 
-        chunks = await optimized_semantic_chunk_text(
-            document_text, 
-            manager # Pass the whole manager
-        )
-        t1 = time.perf_counter()
-        print(f"Document processed and chunked in {t1 - t0:.2f} seconds.")
-
-        # --- Phase 2: PARALLEL KB Building + Query Enhancement ---
-        t2 = time.perf_counter()
-        print("🚀 Starting parallel KB building and query enhancement...")
-        
-        # Create knowledge base
-        knowledge_base = RequestKnowledgeBase(manager)
-        
-        # Run KB building and query enhancement in parallel
-        kb_build_task = knowledge_base.build(chunks)
+        # Create the two independent, top-level tasks
+        doc_pipeline_task = process_document_and_build_kb(request.documents, manager)
         query_enhancement_task = prepare_enhanced_queries_for_all_questions(request.questions)
         
-        # Wait for both to complete
-        _, enhanced_query_data = await asyncio.gather(kb_build_task, query_enhancement_task)
+        # Run them concurrently and wait for both to finish
+        knowledge_base, enhanced_query_data = await asyncio.gather(
+            doc_pipeline_task, 
+            query_enhancement_task
+        )
         
-        t3 = time.perf_counter()
-        print(f"✅ Parallel KB building + query enhancement completed in {t3 - t2:.2f} seconds.")
-        
-        # --- Phase 3: Optimized Agent Execution ---
-        t4 = time.perf_counter()
-        
-        # Create tasks with precomputed queries
-        tasks = []
-        for i, question in enumerate(request.questions):
-            precomputed_data = enhanced_query_data[i]
-            task = answer_question_with_agent(question, knowledge_base, precomputed_data)
-            tasks.append(task)
-        
-        print(f"🎯 Spawning {len(request.questions)} optimized agents with precomputed queries...")
-        answers = await asyncio.gather(*tasks)
-        print("✅ All optimized agent tasks completed.")
-        t5 = time.perf_counter()
-        print(f"⚡️ Optimized Agent Execution took: {t5 - t4:.4f} seconds.")
+        t1 = time.perf_counter()
+        print(f"✅ Parallel preparation completed in {t1 - t0:.2f} seconds.")
 
-        # --- Phase 4: Logging and Response ---
+        # --- Safety check for empty document ---
+        if not knowledge_base.chunks:
+            print("⚠️ Document processing resulted in zero chunks. Cannot answer questions.")
+            answers = ["I could not find relevant information in the document because it appears to be empty or unparsable."] * len(request.questions)
+            return RunResponse(answers=answers)
+
+        # --- Phase 2: Optimized Agent Execution (Unchanged) ---
+        t2 = time.perf_counter()
+        
+        tasks = [
+            answer_question_with_agent(question, knowledge_base, precomputed_data)
+            for i, question in enumerate(request.questions)
+            for precomputed_data in [enhanced_query_data[i]]
+        ]
+        
+        print(f"🎯 Spawning {len(request.questions)} optimized agents...")
+        answers = await asyncio.gather(*tasks)
+        print("✅ All agent tasks completed.")
+        t3 = time.perf_counter()
+        print(f"⚡️ Agent Execution took: {t3 - t2:.4f} seconds.")
+
+        # --- Phase 3: Logging and Response (Unchanged) ---
         print("Logging Q&A pairs to qa_log.log...")
         for question, answer in zip(request.questions, answers):
             cleaned_answer = answer.replace('\n', ' ')
@@ -108,7 +137,7 @@ async def run_submission(request: RunRequest = Body(...)):
         
         end = time.perf_counter()
         print(f"🏁 Total processing time: {end - start_time:.2f} seconds")
-        print(f"⚡️ Performance boost achieved through parallel processing!")
+        print(f"🏆 Performance boost achieved through maximum parallelization!")
         return RunResponse(answers=answers)
 
     except ValueError as e:

@@ -1,6 +1,7 @@
 # api/core/agent_logic.py
 import os
 import asyncio
+import time
 from typing import List, Dict, Tuple
 from agno.agent import Agent, RunResponse
 from agno.models.google import Gemini
@@ -20,9 +21,10 @@ llm = Gemini(
 )
 
 # Separate LLM instance for query enhancement (lower temperature for consistency)
-query_enhancer_llm = OpenAIChat(
-    id="gpt-4.1-mini",
-    temperature=0.2,  # More deterministic for query generation
+query_enhancer_llm = Gemini(
+    id="gemini-2.5-flash-lite",
+    temperature=0.3,
+    api_key=GEMINI_API_KEY
 )
 
 async def enhance_query_with_llm(original_query: str, query_type: str) -> Dict[str, str]:
@@ -42,7 +44,7 @@ Generate exactly 3 enhanced queries:
 3. CONTEXTUAL: A version that considers broader context and implications
 
 Guidelines:
-- Keep each query concise (max 10 words)
+- Keep each query concise
 - Focus on terms likely to appear in documents
 - For comparison queries, ensure both items are covered
 - For numerical queries, include terms that might appear near numbers
@@ -54,27 +56,32 @@ EXPANDED: [query]
 CONTEXTUAL: [query]"""
 
     try:
-        # Create a simple agent for query enhancement
+        # --- TIMER START ---
+        t0 = time.perf_counter()
+        
         query_agent = Agent(
             model=query_enhancer_llm,
             instructions="You are a search query expert. Follow the user's instructions exactly.",
-            tools=[],  # No tools needed for query enhancement
             debug_mode=False,
             reasoning=False
         )
         
         response: RunResponse = await query_agent.arun(enhancement_prompt)
+        
+        # --- TIMER END ---
+        t1 = time.perf_counter()
+        print(f"    ⏱️ LLM call for '{original_query[:30]}...' took {t1 - t0:.2f}s")
+
         enhanced_queries = parse_enhanced_queries(response.content)
         
-        # Fallback to original logic if parsing fails
         if not enhanced_queries or len(enhanced_queries) != 3:
-            print("⚠️ LLM query enhancement failed, falling back to original logic")
+            print(f"    ⚠️ LLM query enhancement failed for '{original_query[:30]}...', falling back to rules.")
             return generate_fallback_queries(original_query, query_type)
             
         return enhanced_queries
         
     except Exception as e:
-        print(f"⚠️ Query enhancement error: {e}, using fallback")
+        print(f"    ⚠️ Query enhancement error for '{original_query[:30]}...': {e}, using fallback")
         return generate_fallback_queries(original_query, query_type)
 
 def parse_enhanced_queries(llm_response: str) -> Dict[str, str]:
@@ -95,6 +102,7 @@ def parse_enhanced_queries(llm_response: str) -> Dict[str, str]:
 
 def generate_fallback_queries(original_query: str, query_type: str) -> Dict[str, str]:
     """Fallback query generation using original logic"""
+    # ... (no changes to this function)
     if query_type == "comparison":
         return {
             'direct': original_query,
@@ -122,10 +130,13 @@ async def prepare_enhanced_queries_for_all_questions(questions: List[str]) -> Li
     """
     print(f"🚀 Pre-processing {len(questions)} questions for enhanced queries...")
     
+    # --- TIMER START ---
+    t_start = time.perf_counter()
+
     async def process_single_question(question: str) -> Dict[str, str]:
         query_type, concepts = QueryClassifier.classify_query(question)
         enhanced_queries = await enhance_query_with_llm(question, query_type)
-        print(f"✅ Enhanced queries for '{question[:50]}...': {query_type}")
+        print(f"  ✅ Enhanced queries for '{question[:50]}...': {query_type}")
         return {
             'question': question,
             'query_type': query_type,
@@ -133,13 +144,14 @@ async def prepare_enhanced_queries_for_all_questions(questions: List[str]) -> Li
             'enhanced_queries': enhanced_queries
         }
     
-    # Process all questions in parallel
     tasks = [process_single_question(q) for q in questions]
     results = await asyncio.gather(*tasks)
     
-    print("🎯 All query enhancements completed!")
+    # --- TIMER END ---
+    t_end = time.perf_counter()
+    
+    print(f"🎯 All query enhancements completed in {t_end - t_start:.2f}s!")
     return results
-
 async def answer_question_with_agent(question: str, knowledge_base: RequestKnowledgeBase, 
                                    precomputed_queries: Dict[str, str] = None) -> str:
     """
@@ -171,17 +183,17 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
             results = []
             for concept in concepts[:2]:
                 final_query = f"{query_text} {concept}"
-                concept_results = await knowledge_base.search(final_query, k=3, fusion_weights=fusion_weights)
+                concept_results = await knowledge_base.search(final_query, k=5, fusion_weights=fusion_weights)
                 results.extend(concept_results)
             return list(dict.fromkeys(results))[:3]
         
         elif query_type == "factual":
             prefixed_query = f"search_query: {query_text}"
-            return await knowledge_base.search(prefixed_query, k=3, fusion_weights=fusion_weights)
+            return await knowledge_base.search(prefixed_query, k=5, fusion_weights=fusion_weights)
         
         else: # General query
             prefixed_query = f"search_query: {query_text}"
-            return await knowledge_base.search(prefixed_query, k=3, fusion_weights=fusion_weights)
+            return await knowledge_base.search(prefixed_query, k=5, fusion_weights=fusion_weights)
 
     async def search_direct(query: str) -> List[str]:
         """Primary search using LLM-enhanced direct query."""
@@ -202,31 +214,50 @@ async def answer_question_with_agent(question: str, knowledge_base: RequestKnowl
         return await lightning_search(enhanced_query, "contextual")
 
     # Enhanced instructions with focus on accuracy over brevity
-    instructions = f"""You are an expert Q&A system with access to document search tools. Your goal is to provide accurate, comprehensive answers based ONLY on the provided search results.
+    instructions = f""""You are a specialized AI system that functions as a factual database for a given document. Your primary role is to answer a user's question by first using a set of search tools to find relevant evidence, and then synthesizing that evidence into a concise, factual answer.
 
-**CRITICAL RULES:**
-1. If a user asks for something that cannot be in a document (e.g., "write code", "generate a javascript function"), you MUST respond with: "I cannot answer this question as it is outside the scope of document analysis." Do not use the search tools.
+**The user's question is:** "{question}"
 
-2. **Answer Quality Priority**: Provide complete, accurate answers. MUST MENTION EXACT CLAUSES ETC WHEREVER APPLICABLE. You must however limit yourself to 2-3 sentences per answer, but ensure you cover all relevant aspects of the question.
+**--- YOUR TWO-STEP PROCESS ---**
 
-**Query Generation Rules:**
-For document-related questions, you MUST use all three search tools in parallel, concurrently:
-1. `search_direct`: Uses optimized keyword-focused search
-2. `search_expanded`: Uses concept-expanded search with related terms  
-3. `search_contextual`: Uses broader contextual search
+**STEP 1: SEARCH FOR EVIDENCE**
 
-Query Type Detected: {query_type}
-Key Concepts: {concepts}
+To gather evidence, you MUST execute all three of the following search tools in parallel. These tools have been pre-configured with optimized queries based on the user's question.
 
-**Answer Synthesis Rules:**
-1. **Comprehensive Coverage**: Address all aspects of the question based on available evidence. However, do not answer outside the scope of the question. Be concise but thorough.
-2. **Evidence Integration**: Synthesize information from multiple search results into a coherent answer
-3. **Handle Missing Information**: If search results partially answer the question, clearly explain what information is available and what might be missing
-4. **Handle Irrelevant Results**: If search results are completely irrelevant, respond with "I could not find relevant information in the document."
-5. **Yes/No Questions**: Start with "Yes," or "No," followed by a complete explanation with supporting evidence
-6. **Confidence and Uncertainty**: Acknowledge when information is unclear or when you're making inferences
-7. **Source Integration**: Explain how different pieces of evidence support your answer
+1. `search_direct`: Retrieves results using a keyword-focused query.
+2. `search_expanded`: Retrieves results using a query with related concepts and synonyms.
+3. `search_contextual`: Retrieves results using a query that considers the broader context.
 
+*Exception Rule:* If the user's question is clearly not something that can be answered from a document (e.g., "write code", "give me a password"), you MUST skip the search step and immediately respond with the exact phrase: "I cannot answer this question as it is outside the scope of document analysis."
+
+**STEP 2: SYNTHESIZE THE FINAL ANSWER**
+
+After you have received the results from all three searches, you MUST synthesize a final answer based on the following strict rules.
+
+**--- ANSWER SYNTHESIS RULES ---**
+
+1.  **BE A DATABASE, NOT A CHATBOT:** Your tone must be impersonal and factual.
+    - DO NOT use conversational phrases like "The policy states..." or "As you can see...".
+    - DO NOT start your answer with "Yes," or "No," unless the sample response style explicitly shows it for that type of question.
+    - Get straight to the point.
+
+2.  **SUMMARIZE, DO NOT QUOTE:** Never quote the evidence directly. Read the evidence, understand the rule, and state the rule in your own words as a concise summary.
+
+3.  **EXTREME BREVITY:** Your answer MUST be a single, dense sentence, or at most two very short sentences. The ideal answer is under 40 words. Eliminate all filler words.
+
+4.  **NO CLAUSE NUMBERS:** DO NOT mention specific clause numbers, section titles, or page numbers.
+
+5.  **HANDLE MISSING INFORMATION:** If the search results do not contain the information to answer the question, respond with the single, exact phrase: "I could not find relevant information in the document."
+
+**STYLE GUIDE (EXAMPLES):**
+
+**GOOD Answer (Factual, Brief, Impersonal):**
+"A grace period of thirty days is provided for premium payment after the due date to renew or continue the policy without losing continuity benefits."
+
+**BAD Answer (Conversational, Wordy, Cites Clauses):**
+"Yes, according to Clause 5.2 of the policy, you are given a grace period of thirty days after your premium due date to make a payment without your policy lapsing."
+
+Begin your process now.
 """
 
     agent = Agent(

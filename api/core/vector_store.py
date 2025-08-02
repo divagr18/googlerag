@@ -28,20 +28,24 @@ class RequestKnowledgeBase:
         tokenized_corpus = await asyncio.gather(*tasks)
         self.bm25_index = BM25Okapi(tokenized_corpus)
 
-    async def _build_faiss_async(self, chunks: List[str]):
-        """Builds FAISS index with async-friendly embedding batches."""
-        print("Building FAISS index (with async batching)...")
+    async def _build_faiss_async(self, chunks: List[str], precomputed_embeddings: np.ndarray = None): # <--- ADDED ARGUMENT
+        """Builds FAISS index, using precomputed embeddings if available."""
+        print("Building FAISS index...")
         
-        # Embed chunks in smaller batches, yielding control in between.
-        all_embeddings = []
-        batch_size = 256
-        for i in range(0, len(chunks), batch_size):
-            batch_texts = chunks[i:i + batch_size]
-            batch_embeddings = self.manager.encode_batch(batch_texts)
-            all_embeddings.append(batch_embeddings)
-            await asyncio.sleep(0) # Yield control
-            
-        embeddings = np.vstack(all_embeddings)
+        if precomputed_embeddings is not None:
+            print("--> Using pre-computed embeddings.")
+            embeddings = precomputed_embeddings
+        else:
+            print("--> Generating embeddings on-the-fly (fallback).")
+            all_embeddings = []
+            batch_size = 256
+            for i in range(0, len(chunks), batch_size):
+                batch_texts = chunks[i:i + batch_size]
+                batch_embeddings = self.manager.encode_batch(batch_texts)
+                all_embeddings.append(batch_embeddings)
+                await asyncio.sleep(0)
+            embeddings = np.vstack(all_embeddings)
+
         if embeddings.dtype == np.float16:
             embeddings = embeddings.astype(np.float32)
         
@@ -49,15 +53,14 @@ class RequestKnowledgeBase:
         self.faiss_index = faiss.IndexFlatIP(dimension)
         self.faiss_index.add(embeddings)
 
-    async def build(self, chunks: List[str]):
+    async def build(self, chunks: List[str], precomputed_embeddings: np.ndarray = None): # <--- ADDED ARGUMENT
         if not chunks: raise ValueError("Cannot build knowledge base from empty chunks.")
         self.chunks = chunks
         print(f"Building KB with {len(chunks)} chunks...")
         
-        # Run both builds concurrently. Both are now internally parallel/async.
         await asyncio.gather(
             self._build_bm25_parallel(chunks),
-            self._build_faiss_async(chunks)
+            self._build_faiss_async(chunks, precomputed_embeddings) # <--- PASS IT THROUGH
         )
         print(f"✅ KB ready ({self.faiss_index.ntotal} vectors)")
 
