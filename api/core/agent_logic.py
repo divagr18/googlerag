@@ -238,26 +238,15 @@ After you have received the results from all three searches, you MUST synthesize
 
 1.  **BE A DATABASE, NOT A CHATBOT:** Your tone must be impersonal and factual.
     - DO NOT use conversational phrases like "The policy states..." or "As you can see...".
-    - DO NOT start your answer with "Yes," or "No," unless the sample response style explicitly shows it for that type of question.
     - Get straight to the point.
 
 2.  **SUMMARIZE, DO NOT QUOTE:** Never quote the evidence directly. Read the evidence, understand the rule, and state the rule in your own words as a concise summary.
 
-3.  **EXTREME BREVITY:** Your answer MUST be a single, dense sentence, or at most two very short sentences. The ideal answer is under 40 words. Eliminate all filler words.
+3.  **QUOTE RELEVANT CLAUSES/ARTICLES**: Must quote specific articles, clauses, or sections from the document that directly support your answer. Use the exact text from the document, but do not quote it as a direct citation. Instead, summarize the rule in your own words.
 
-4.  **NO CLAUSE NUMBERS:** DO NOT mention specific clause numbers, section titles, or page numbers.
+4.  **HANDLE MISSING INFORMATION:** If the search results do not contain the information to answer the question, You may use your knowledge to fill in some gaps, such as if it is asked "If the police torture someone in custody, what right is being violated?", you may use your knowledge to identify the right being violated, but only if you cannot find relevant information in the document, and only if you are confident in your answer.
+    You must be detailed enough if doing so, 2-3 sentences max. Quote articles, clauses if applicable. If you still cannot answer that at all, respond with the single, exact phrase: "I could not find relevant information in the document."
 
-5.  **HANDLE MISSING INFORMATION:** If the search results do not contain the information to answer the question, respond with the single, exact phrase: "I could not find relevant information in the document."
-
-**STYLE GUIDE (EXAMPLES):**
-
-**GOOD Answer (Factual, Brief, Impersonal):**
-"A grace period of thirty days is provided for premium payment after the due date to renew or continue the policy without losing continuity benefits."
-
-**BAD Answer (Conversational, Wordy, Cites Clauses):**
-"Yes, according to Clause 5.2 of the policy, you are given a grace period of thirty days after your premium due date to make a payment without your policy lapsing."
-
-Begin your process now.
 """
 
     agent = Agent(
