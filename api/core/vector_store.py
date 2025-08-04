@@ -7,121 +7,150 @@ from rank_bm25 import BM25Okapi
 import re
 from concurrent.futures import ThreadPoolExecutor
 
+# Thread pool for CPU-bound tasks
 cpu_executor = ThreadPoolExecutor()
+# Semaphore to cap concurrent searches
+search_sem = asyncio.Semaphore(40)
+
 
 def _tokenize_doc(doc: str) -> List[str]:
     return re.findall(r"\b[a-zA-Z]{3,}\b", doc.lower())
 
 class RequestKnowledgeBase:
-    def __init__(self, embedding_manager: OptimizedEmbeddingManager):
+    def __init__(
+        self,
+        embedding_manager: OptimizedEmbeddingManager,
+        use_gpu: bool = True,
+        index_type: str = "ivf_pq",  # options: "ivf_pq" or "hnsw"
+        nlist: int = 512,
+        m: int = 64,
+        hnsw_m: int = 32
+    ):
         self.manager = embedding_manager
         self.chunks: List[str] = []
-        self.faiss_index: faiss.IndexFlatIP = None
+        self.faiss_index = None
         self.bm25_index: BM25Okapi = None
         self.cache: Dict[str, List[str]] = {}
+        self.embed_cache: Dict[str, np.ndarray] = {}
+        self.use_gpu = use_gpu
+        self.index_type = index_type
+        # IVF-PQ params
+        self.nlist = nlist
+        self.m = m
+        # HNSW params
+        self.hnsw_m = hnsw_m
 
     async def _build_bm25_parallel(self, chunks: List[str]):
-        print("Building BM25 index (in parallel)...")
         loop = asyncio.get_event_loop()
-        tasks = [loop.run_in_executor(cpu_executor, _tokenize_doc, chunk) for chunk in chunks]
-        tokenized_corpus = await asyncio.gather(*tasks)
-        self.bm25_index = BM25Okapi(tokenized_corpus)
+        tasks = [loop.run_in_executor(cpu_executor, _tokenize_doc, c) for c in chunks]
+        tokenized = await asyncio.gather(*tasks)
+        self.bm25_index = BM25Okapi(tokenized)
 
-    async def _build_faiss_async(self, chunks: List[str], precomputed_embeddings: np.ndarray = None):
-        """Builds FAISS index, using precomputed embeddings if available, with L2-normalization."""
-        print("Building FAISS index...")
-
-        # Obtain embeddings
-        if precomputed_embeddings is not None:
-            print("--> Using pre-computed embeddings.")
-            embeddings = precomputed_embeddings
-        else:
-            print("--> Generating embeddings on-the-fly (fallback).")
-            all_embeddings = []
-            batch_size = 256
-            for i in range(0, len(chunks), batch_size):
-                batch_texts = chunks[i:i + batch_size]
-                batch_embeddings = self.manager.encode_batch(batch_texts)
-                all_embeddings.append(batch_embeddings)
-                await asyncio.sleep(0)
-            embeddings = np.vstack(all_embeddings)
-
-        # Ensure float32
-        if embeddings.dtype == np.float16:
-            embeddings = embeddings.astype(np.float32)
-
-        # L2-normalize embeddings for cosine similarity
+    async def _build_faiss_async(self, chunks: List[str], embeddings: np.ndarray):
+        # Normalize & cast
+        embeddings = embeddings.astype(np.float32)
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         embeddings = embeddings / np.maximum(norms, 1e-12)
 
-        # Initialize and add to FAISS index
-        dimension = embeddings.shape[1]
-        self.faiss_index = faiss.IndexFlatIP(dimension)
-        self.faiss_index.add(embeddings)
+        dim = embeddings.shape[1]
+        num_vecs = embeddings.shape[0]
 
-    async def build(self, chunks: List[str], precomputed_embeddings: np.ndarray = None):
+        # If too few points to train IVF-PQ, fallback to FlatIP
+        min_required = self.nlist * 40  # typical rule-of-thumb: 40 vectors per list
+        if self.index_type == "ivf_pq" and num_vecs < min_required:
+            print(f"⚠️ Only {num_vecs} vectors (<{min_required}), using FlatIP instead of IVF-PQ.")
+            index = faiss.IndexFlatIP(dim)
+            index.add(embeddings)
+        else:
+            if self.index_type == "hnsw":
+                index = faiss.IndexHNSWFlat(dim, self.hnsw_m)
+                index.hnsw.efConstruction = 200
+                index.hnsw.efSearch = 50
+                index.add(embeddings)
+            else:
+                # IVF+PQ
+                quantizer = faiss.IndexFlatIP(dim)
+                index = faiss.IndexIVFPQ(quantizer, dim, self.nlist, self.m, 8)
+                index.train(embeddings)
+                index.add(embeddings)
+
+        # Attempt GPU offload, else keep CPU
+        if self.use_gpu:
+            try:
+                res = faiss.StandardGpuResources()
+                self.faiss_index = faiss.index_cpu_to_gpu(res, 0, index)
+            except Exception:
+                print("⚠️ FAISS GPU resources unavailable, falling back to CPU index.")
+                self.faiss_index = index
+        else:
+            self.faiss_index = index
+
+
+    async def build(self, chunks: List[str], precomputed_embeddings: np.ndarray):
         if not chunks:
-            raise ValueError("Cannot build knowledge base from empty chunks.")
+            raise ValueError("Cannot build KB from empty chunks")
         self.chunks = chunks
-        print(f"Building KB with {len(chunks)} chunks...")
+        # Build BM25 and FAISS in parallel
         await asyncio.gather(
             self._build_bm25_parallel(chunks),
             self._build_faiss_async(chunks, precomputed_embeddings)
         )
-        print(f"✅ KB ready ({self.faiss_index.ntotal} vectors)")
 
-    async def search(self, query: str, k: int = 5, fusion_weights: Tuple[float, float] = None) -> List[str]:
-        cache_key = f"{query}_{k}_{fusion_weights}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-        if self.faiss_index is None:
-            raise ValueError("Knowledge base not built yet.")
-        loop = asyncio.get_event_loop()
-        results = await loop.run_in_executor(None, self._search_sync, query, k, fusion_weights)
-        if len(self.cache) > 50:
-            self.cache.pop(next(iter(self.cache)))
-        self.cache[cache_key] = results
-        return results
+    async def search(
+        self,
+        query: str,
+        k: int = 5,
+        fusion_weights: Tuple[float, float] = (0.4, 0.6),
+        dynamic_k: bool = True,
+        similarity_threshold: float = 0.1
+    ) -> List[str]:
+        key = f"{query}_{k}_{fusion_weights}_{dynamic_k}"
+        if key in self.cache:
+            return self.cache[key]
 
-    def _search_sync(self, query: str, k: int, fusion_weights: Tuple[float, float] = None) -> List[str]:
-        search_k = min(k * 2, len(self.chunks), 20)
-        bm25_results = self._bm25_search(query, search_k)
-        faiss_results = self._faiss_search(query, search_k)
-        fused = self._fuse_results(bm25_results, faiss_results, fusion_weights)
-        return fused[:k]
+        async with search_sem:
+            # Encode or fetch from cache
+            if query in self.embed_cache:
+                q_emb = self.embed_cache[query]
+            else:
+                q_emb = self.manager.encode_batch([query])
+                q_emb = q_emb.astype(np.float32)
+                q_emb /= np.maximum(np.linalg.norm(q_emb, axis=1, keepdims=True), 1e-12)
+                self.embed_cache[query] = q_emb
 
-    def _bm25_search(self, query: str, k: int) -> Dict[int, float]:
-        tokens = _tokenize_doc(query)
-        if not tokens:
-            return {}
-        scores = self.bm25_index.get_scores(tokens)
-        if len(scores) <= k:
-            return {i: s for i, s in enumerate(scores) if s > 0}
-        top = np.argpartition(scores, -k)[-k:]
-        return {i: scores[i] for i in top if scores[i] > 0}
+            # BM25 search
+            tok = _tokenize_doc(query)
+            bm25_res = {}
+            if tok and self.bm25_index:
+                scores = self.bm25_index.get_scores(tok)
+                top_idx = np.argpartition(scores, -k)[-k:]
+                bm25_res = {i: scores[i] for i in top_idx if scores[i] > 0}
 
-    def _faiss_search(self, query: str, k: int) -> Dict[int, float]:
-        emb = self.manager.encode_batch([query])
-        if emb.dtype == np.float16:
-            emb = emb.astype(np.float32)
-        # Normalize query embedding
-        norm = np.linalg.norm(emb, axis=1, keepdims=True)
-        emb = emb / np.maximum(norm, 1e-12)
-        distances, indices = self.faiss_index.search(emb, k)
-        return {idx: float(dist) for idx, dist in zip(indices[0], distances[0]) if idx != -1 and dist > 0}
+            # FAISS search
+            faiss_k = min(k * 2, len(self.chunks))
+            D, I = self.faiss_index.search(q_emb, faiss_k)
+            faiss_res = {int(idx): float(score) for idx, score in zip(I[0], D[0]) if idx != -1 and score > 0}
 
-    def _fuse_results(self, bm25: Dict[int, float], faiss: Dict[int, float], fusion_weights: Tuple[float, float] = None) -> List[str]:
-        if bm25:
-            max_b = max(bm25.values()) or 1.0
-            bm25 = {i: v / max_b for i, v in bm25.items()}
-        if faiss:
-            max_f = max(faiss.values()) or 1.0
-            faiss = {i: v / max_f for i, v in faiss.items()}
-        if fusion_weights is None:
-            weights = (0.4, 0.6)
-        else:
-            weights = fusion_weights
-        indices = set(bm25) | set(faiss)
-        scored = [(i, weights[0] * bm25.get(i, 0) + weights[1] * faiss.get(i, 0)) for i in indices]
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return [self.chunks[i] for i, score in scored if score > 0]
+            # Fuse scores
+            max_b = max(bm25_res.values()) if bm25_res else 1
+            max_f = max(faiss_res.values()) if faiss_res else 1
+            combined = {}
+            for idx in set(bm25_res) | set(faiss_res):
+                b = bm25_res.get(idx, 0) / max_b
+                f = faiss_res.get(idx, 0) / max_f
+                combined[idx] = fusion_weights[0] * b + fusion_weights[1] * f
+
+            # Optional dynamic k: stop early if top score is high
+            sorted_idx = sorted(combined.items(), key=lambda x: -x[1])
+            if dynamic_k and sorted_idx and sorted_idx[0][1] > similarity_threshold:
+                top_n = 1
+            else:
+                top_n = k
+            results = [self.chunks[i] for i, _ in sorted_idx[:top_n]]
+
+            # Cache and return
+            if len(self.cache) > 128:
+                self.cache.pop(next(iter(self.cache)))
+            self.cache[key] = results
+            return results
+
