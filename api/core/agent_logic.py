@@ -26,7 +26,7 @@ async def generate_query_strategy(original_query: str) -> Tuple[Dict, float]:
     
     Analyze the user question: "{original_query}"
     
-    - If 'simple', generate 2 enhanced search queries: 'direct' (keywords) and 'expanded' (synonyms/related concepts).
+    - If 'simple', generate 2 enhanced search queries: 'direct' (direct queries) and 'expanded' (synonyms/related concept queries). Try not to overlap the two.
     - If 'decompose', break the question into a list of simple sub-questions.
     
     Respond in JSON format only.
@@ -34,11 +34,11 @@ async def generate_query_strategy(original_query: str) -> Tuple[Dict, float]:
     Example 'simple':
     ```json
     {{
-      "strategy": "simple",
-      "queries": {{
-        "direct": "grace period premium payment",
-        "expanded": "policy renewal premium payment grace period continuity benefits"
-      }}
+    "strategy": "simple",
+    "queries": {
+        "direct": "What is the grace period for insurance premium payments?",
+        "expanded": "What happens if an insurance premium is paid late, and how long does coverage remain active during the grace period?"
+    }
     }}
     ```
     
@@ -150,7 +150,7 @@ async def answer_question_orchestrator(
     query_strategy_data: Dict,
     enrichment_enabled: bool
 ) -> str:
-    MIN_CHUNKS = 6
+    MIN_CHUNKS = 8
     strategy = query_strategy_data.get('strategy', 'simple')
     original_question = query_strategy_data.get('original_question', '')
     
@@ -209,7 +209,7 @@ async def answer_question_orchestrator(
 
 def get_dynamic_fusion_weights(query_type: str, search_type: str) -> Tuple[float, float]:
     base_weights = {
-        "factual": (0.6, 0.4),
+        "factual": (0.7, 0.3),
         "comparison": (0.4, 0.6),
         "conditional": (0.5, 0.5),
         "general": (0.4, 0.6)
