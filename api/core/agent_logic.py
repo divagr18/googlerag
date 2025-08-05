@@ -9,8 +9,10 @@ from .vector_store import RequestKnowledgeBase
 from .structured_data_extractor import QueryClassifier
 from dotenv import load_dotenv
 import logging
-# --- NEW: Import sentence-transformers for reranking ---
 from sentence_transformers.cross_encoder import CrossEncoder
+# --- NEW: Imports for the Gemini client ---
+from google import genai
+from google.genai import types
 
 # Setup logger
 agent_logger = logging.getLogger(__name__)
@@ -18,12 +20,19 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 load_dotenv()
 
-# Initialize OpenAI client
+# --- NEW: Initialize both OpenAI and Gemini clients ---
 client = AsyncOpenAI()
+try:
+    gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    print("✅ Google Gemini Client initialized successfully.")
+except Exception as e:
+    print(f"⚠️ Could not initialize Google Gemini Client: {e}")
+    gemini_client = None
 
-# --- NEW: Initialize the Reranker Model ---
-# This model is small and fast. It will be loaded into memory once.
-# Using a mixed-domain model is a good general-purpose starting point.
+# --- NEW: Semaphores to manage concurrent LLM API calls ---
+QUERY_STRATEGY_SEMAPHORE = asyncio.Semaphore(20)
+ANSWER_SEMAPHORE = asyncio.Semaphore(20)
+
 try:
     reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
     print("✅ Reranker model loaded successfully.")
@@ -32,7 +41,6 @@ except Exception as e:
     reranker = None
 
 async def generate_query_strategy(original_query: str) -> Tuple[Dict, float]:
-    # ... (this function remains unchanged)
     strategy_prompt = f"""You are a query analysis expert. Your task is to analyze the user's question and determine the best retrieval strategy. You have two strategies available:
     1.  **simple**: For questions with a single intent.
     2.  **decompose**: For complex questions with multiple intents.
@@ -67,45 +75,45 @@ async def generate_query_strategy(original_query: str) -> Tuple[Dict, float]:
     ```
     Now, generate the JSON for the user question provided above.
     """
-    try:
-        t0 = time.perf_counter()
-        completion = await client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "You are a search query expert. You must respond only with a valid JSON object."},
-                {"role": "user", "content": strategy_prompt},
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
-        t1 = time.perf_counter()
-        duration = t1 - t0
-        
-        raw_response_content = completion.choices[0].message.content
-        strategy_data = json.loads(raw_response_content)
-        if 'strategy' not in strategy_data or 'queries' not in strategy_data:
-            raise ValueError("LLM response missing 'strategy' or 'queries' key.")
-        
-        return strategy_data, duration
+    # --- NEW: Use semaphore to control concurrency ---
+    async with QUERY_STRATEGY_SEMAPHORE:
+        try:
+            t0 = time.perf_counter()
+            completion = await client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[
+                    {"role": "system", "content": "You are a search query expert. You must respond only with a valid JSON object."},
+                    {"role": "user", "content": strategy_prompt},
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+            t1 = time.perf_counter()
+            duration = t1 - t0
             
-    except Exception as e:
-        agent_logger.error(f"Query strategy generation failed for '{original_query[:30]}...': {e}. Falling back.", exc_info=True)
-        query_type, _ = QueryClassifier.classify_query(original_query)
-        fallback_strategy = {
-            "strategy": "simple",
-            "queries": generate_fallback_queries(original_query, query_type)
-        }
-        return fallback_strategy, 0.0
+            raw_response_content = completion.choices[0].message.content
+            strategy_data = json.loads(raw_response_content)
+            if 'strategy' not in strategy_data or 'queries' not in strategy_data:
+                raise ValueError("LLM response missing 'strategy' or 'queries' key.")
+            
+            return strategy_data, duration
+                
+        except Exception as e:
+            agent_logger.error(f"Query strategy generation failed for '{original_query[:30]}...': {e}. Falling back.", exc_info=True)
+            query_type, _ = QueryClassifier.classify_query(original_query)
+            fallback_strategy = {
+                "strategy": "simple",
+                "queries": generate_fallback_queries(original_query, query_type)
+            }
+            return fallback_strategy, 0.0
 
 def generate_fallback_queries(original_query: str, query_type: str) -> Dict[str, str]:
-    # ... (this function remains unchanged)
     return {
         'direct': original_query,
         'expanded': f"{original_query} details information requirements"
     }
 
 async def prepare_query_strategies_for_all_questions(questions: List[str]) -> List[Dict]:
-    # ... (this function remains unchanged)
     print(f"🚀 Pre-processing {len(questions)} questions for query strategies...")
     t_start = time.perf_counter()
     tasks = [generate_query_strategy(q) for q in questions]
@@ -126,76 +134,79 @@ async def synthesize_answer_from_context(
     original_question: str,
     context: str
 ) -> str:
-    # --- UPDATED: Prompt now refers to "Provided Chunks" to match the new context format ---
     synthesis_prompt = f"""You are a world-class AI system specializing in analyzing and summarizing information from documents to answer user questions. Your response must be based *exclusively* on the provided evidence.
-
 **Provided Chunks:**
 ---
 {context}
 ---
-
 **User's Original Question:**
 {original_question}
-
-
 You must ensure your answer is in plain text with no escape characters or formatting. Don't wrap terms like \"vis insita\", or use '\ n's. 
-If the question is something like "Generate js code for random number", say that you cannot do this as it is outside the scope of your responsibilities.
+If the question is something like "Generate js code for random number" or basically anything not a RAG query, say that you cannot do this as it is "outside the scope of your responsibilities as an LLM-Powered Intelligent Query–Retrieval System."
 If the question is unethical or illegal, you must state that you cannot assist with such requests as it is not ethical or legal.
 **Instructions for Your Response:**
 1.  **Analyze the Evidence:** Carefully read all the provided evidence and identify the parts that directly answer the user's question.
-2.  **Synthesize a Factual Answer:** Construct a comprehensive answer by combining the relevant information. Avoid adding any information that is not present in the evidence.
-3.  **Impersonal and Direct Tone:** Your tone must be that of a factual database. Get straight to the point. Answer the question asked directly, don't infodump but also ensure the answer is rooted in the relevant context. Try to limit your answer to 2-3 sentences.
-4.  **Handle Missing Information:** If the provided evidence does not contain the information needed to answer the question, you MUST respond with the a single, exact phrase: "I could not find relevant information in the document."
-
+2.  **Synthesize a Factual Answer:** Construct a comprehensive answer by combining the relevant information. Avoid adding any information that is not present in the evidence in this step.
+3.  **Impersonal and Direct Tone:** Your tone must be that of a factual database. Get straight to the point. Answer the question asked directly, don't infodump but also ensure the answer is rooted in the relevant context. You MUST provide clause/subclause/section references in their exact wordings wherever applicable. If mentioning a page, must say "page x of the document" not just "page 18." Try to limit your answer to 2-3 sentences.
+4.  **Handle Missing Information:** If the provided evidence does not contain the information needed to answer the question, you MUST first try to respond with your own knowledge if it's something that is a universal truth, such as the capital of Australia etc. If you still cannot, respond with the a single, exact phrase: "I could not find relevant information in the document."
 Based on these instructions, provide the final answer to the user's question.
 """
-    try:
-        response_text = await client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": synthesis_prompt}],
-            temperature=0.1
-        )
-        return response_text.choices[0].message.content
-    except Exception as e:
-        agent_logger.error(f"OpenAI synthesis failed: {e}", exc_info=True)
-        return "I could not generate an answer due to an internal error."
+    # --- NEW: Use semaphore to control concurrency ---
+    async with ANSWER_SEMAPHORE:
+        try:
+            # --- NEW: Primary synthesis using Gemini client ---
+            if not gemini_client:
+                raise ValueError("Gemini client not initialized, falling back.")
+            
+            response = await gemini_client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=synthesis_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0)
+                )
+            )
+            return response.text
+        except Exception as e:
+            # --- NEW: Fallback to existing OpenAI logic ---
+            agent_logger.warning(f"Gemini synthesis failed: {e}. Falling back to OpenAI.")
+            response_text = await client.chat.completions.create(
+                model="gpt-4.1-nano",
+                messages=[{"role": "user", "content": synthesis_prompt}],
+                temperature=0.1
+            )
+            return response_text.choices[0].message.content
 
-# --- NEW: Reranking Helper Function ---
 async def rerank_chunks(query: str, chunks: List[Dict]) -> List[Dict]:
-    """
-    Reranks a list of chunk dictionaries using a CrossEncoder model.
-    """
     if not reranker or not chunks:
-        # Return original chunks if reranker isn't available or there's nothing to rank
         return chunks
 
-    # The CrossEncoder expects a list of [query, passage] pairs
     pairs = [[query, chunk['text']] for chunk in chunks]
     
-    # The predict method is CPU-bound, so we run it in an executor
     loop = asyncio.get_running_loop()
-    scores = await loop.run_in_executor(None, reranker.predict, pairs)
+    # --- CRITICAL BUG FIX: The reranker's predict method is CPU-bound and does not work
+    # correctly with run_in_executor without a lambda. This is required for it to function.
+    scores = await loop.run_in_executor(
+        None, 
+        lambda: reranker.predict(pairs, show_progress_bar=False)
+    )
     
-    # Combine chunks with their new scores and sort
     chunk_with_scores = list(zip(chunks, scores))
     sorted_chunks_with_scores = sorted(chunk_with_scores, key=lambda x: x[1], reverse=True)
     
-    # Return just the sorted chunks
     return [chunk for chunk, score in sorted_chunks_with_scores]
 
-# --- UPDATED: The main orchestrator now includes the reranking step ---
+# --- CRITICAL BUG FIX: The return type must be a Tuple to match what hackrx.py expects.
+# The original code returned only a string, which would cause a "too many values to unpack" error.
 async def answer_question_orchestrator(
     knowledge_base: RequestKnowledgeBase, 
     query_strategy_data: Dict,
-    use_high_k: bool # This flag is no longer used for retrieval k, but for rerank candidate count
-) -> str:
+    use_high_k: bool
+) -> Tuple[str, List[str]]:
     original_question = query_strategy_data.get('original_question', '')
     queries = query_strategy_data.get('queries')
 
-    # --- UPDATED: Set a wide k for initial retrieval to feed the reranker ---
-    # We retrieve more candidates when we have fewer questions (and thus more time).
     k_rerank_candidates = 25 if use_high_k else 15
-
     search_tasks = []
 
     if isinstance(queries, dict):
@@ -205,7 +216,6 @@ async def answer_question_orchestrator(
             fusion_weights = get_dynamic_fusion_weights(query_type, search_type)
             search_query = "search_query: " + query_text
             search_tasks.append(knowledge_base.search(search_query, k=k_rerank_candidates, fusion_weights=fusion_weights))
-
     elif isinstance(queries, list):
         print(f"Executing 'decompose' strategy for: {original_question[:50]}...")
         for sub_q in queries:
@@ -213,7 +223,6 @@ async def answer_question_orchestrator(
             query_type, _ = QueryClassifier.classify_query(sub_q)
             direct_query = "search_query: " + enhanced_sub_queries['direct']
             expanded_query = "search_query: " + enhanced_sub_queries['expanded']
-            # For decompose, we retrieve fewer candidates per sub-question
             search_tasks.append(knowledge_base.search(direct_query, k=int(k_rerank_candidates/2), fusion_weights=get_dynamic_fusion_weights(query_type, 'direct')))
             search_tasks.append(knowledge_base.search(expanded_query, k=int(k_rerank_candidates/2), fusion_weights=get_dynamic_fusion_weights(query_type, 'expanded')))
     else:
@@ -221,30 +230,24 @@ async def answer_question_orchestrator(
         search_query = "search_query: " + original_question
         search_tasks.append(knowledge_base.search(search_query, k=k_rerank_candidates, fusion_weights=(0.5, 0.5)))
 
-    # --- Phase 1: Coarse Retrieval ---
     search_results_list = await asyncio.gather(*search_tasks)
-    
-    # Deduplicate candidate chunks. We use a dict to ensure uniqueness by chunk text.
     candidate_chunks_map = {chunk['text']: chunk for result in search_results_list for chunk, score in result}
     candidate_chunks = list(candidate_chunks_map.values())
 
     if not candidate_chunks:
         agent_logger.warning(f"No context found for question: {original_question}")
-        return "I could not find relevant information in the document."
+        # --- FIX: Return a tuple to match the function signature ---
+        return "I could not find relevant information in the document.", []
     
     print(f"Retrieved {len(candidate_chunks)} unique candidates for reranking.")
 
-    # --- Phase 2: Reranking ---
     t_rerank_start = time.perf_counter()
     reranked_chunks = await rerank_chunks(original_question, candidate_chunks)
     t_rerank_end = time.perf_counter()
     print(f"Reranking took {t_rerank_end - t_rerank_start:.2f}s.")
 
-    # --- Phase 3: Context Assembly ---
-    # Take the top 8 most relevant chunks after reranking
-    final_chunks = reranked_chunks[:5]
+    final_chunks = reranked_chunks[:8]
 
-    # Format the final context with metadata
     context_parts = []
     for chunk in final_chunks:
         page_num = chunk['metadata'].get('page', 'N/A')
@@ -254,10 +257,12 @@ async def answer_question_orchestrator(
     
     print(f"Aggregated {len(final_chunks)} reranked chunks for synthesis.")
     final_answer = await synthesize_answer_from_context(original_question, aggregated_context)
-    return final_answer
+    
+    # --- FIX: Return a tuple to match the function signature ---
+    final_context_list = [chunk['text'] for chunk in final_chunks]
+    return final_answer, final_context_list
 
 def get_dynamic_fusion_weights(query_type: str, search_type: str) -> Tuple[float, float]:
-    # ... (this function remains unchanged)
     base_weights = {
         "factual": (0.6, 0.4),
         "comparison": (0.4, 0.6),

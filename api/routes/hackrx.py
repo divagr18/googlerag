@@ -23,6 +23,7 @@ if not qa_logger.handlers:
 from api.state import ml_models
 from api.core.document_processor import stream_document, process_document_stream, optimized_semantic_chunk_text
 from api.core.vector_store import RequestKnowledgeBase
+# --- FIX: Import the correct orchestrator function name ---
 from api.core.agent_logic import answer_question_orchestrator, prepare_query_strategies_for_all_questions
 from api.core.embedding_manager import OptimizedEmbeddingManager
 from agno.models.google import Gemini
@@ -56,12 +57,13 @@ async def process_document_and_build_kb(
     
     t0 = time.perf_counter()
     doc_iterator = stream_document(document_url)
-    document_text = await process_document_stream(document_url, doc_iterator)
+    # --- FIX: The variable name was 'document_text' but should be 'pages_data' to match the next function call ---
+    pages_data = await process_document_stream(document_url, doc_iterator)
     t1 = time.perf_counter()
     print(f"PIPE-DOC: ⏱️ Streamed download & text extraction took: {t1 - t0:.2f}s")
     
     t2 = time.perf_counter()
-    chunks, precomputed_embeddings = await optimized_semantic_chunk_text(document_text, manager)
+    chunks, precomputed_embeddings = await optimized_semantic_chunk_text(pages_data, manager)
     t3 = time.perf_counter()
     print(f"PIPE-DOC: ⏱️ Semantic chunking (incl. embedding) took: {t3 - t2:.2f}s")
     
@@ -114,7 +116,6 @@ async def run_submission(request: RunRequest = Body(...)):
         # --- Phase 2: Optimized Orchestration ---
         t2 = time.perf_counter()
         
-        # FIX: Determine if dynamic k should be high or low based on question count.
         num_questions = len(request.questions)
         use_high_k = num_questions <= 15
         if use_high_k:
@@ -122,7 +123,6 @@ async def run_submission(request: RunRequest = Body(...)):
         else:
             print(f"⚠️ {num_questions} questions (>15). Using low-K values for speed.")
 
-        # FIX: Pass the use_high_k flag to each orchestrator task.
         tasks = [
             answer_question_orchestrator(
                 knowledge_base, 
@@ -133,22 +133,30 @@ async def run_submission(request: RunRequest = Body(...)):
         ]
         
         print(f"🎯 Spawning {len(tasks)} retrieval/synthesis orchestrations...")
-        answers = await asyncio.gather(*tasks)
+        # --- FIX: The result is a list of (answer, context) tuples ---
+        results_with_context = await asyncio.gather(*tasks)
         print("✅ All orchestration tasks completed.")
         t3 = time.perf_counter()
         print(f"⚡️ Orchestration & Synthesis took: {t3 - t2:.4f} seconds.")
 
+        # --- FIX: Unpack the tuples to get a list of just the answer strings ---
+        final_answers = [ans for ans, ctx in results_with_context]
+
         # --- Phase 3: Logging and Response ---
         print("Logging Q&A pairs to qa_log.log...")
-        for question, answer in zip(request.questions, answers):
+        # --- FIX: Iterate over the unpacked 'final_answers' list ---
+        for question, answer in zip(request.questions, final_answers):
+            # Now 'answer' is a string, so .replace() will work correctly.
             cleaned_answer = answer.replace('\n', ' ').replace('\r', '')
             qa_logger.info(f"{question} | A: {cleaned_answer}")
         
         end_time = time.perf_counter()
         print(f"🏁 Total request processing time: {end_time - start_time:.2f} seconds")
-        return RunResponse(answers=answers)
+        # --- FIX: Return the list of answer strings ---
+        return RunResponse(answers=final_answers)
 
     except ValueError as e:
+        # This is where the original "too many values to unpack" error was being caught
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logging.error(f"An internal error occurred during /run: {e}", exc_info=True)
