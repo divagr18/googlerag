@@ -140,31 +140,29 @@ async def process_document_stream(
     else:
         raise ValueError(f"Unsupported file type: '{file_type}'. Please provide a supported document or image file.")
 
-# ... (rest of the file is unchanged) ...
-def smart_paragraph_split(text: str, page_num: int) -> List[Tuple[str, int]]:
-    paragraphs = text.split('\n\n')
-    result: List[Tuple[str, int]] = []
-    for para in paragraphs:
-        para = para.strip()
-        if len(para) > 50:
-            result.append((para, page_num))
-    return result
 
 async def optimized_semantic_chunk_text(
     pages_data: List[Tuple[str, int]],
     embedding_manager: OptimizedEmbeddingManager,
-    similarity_threshold: float = 0.3,
-    max_chunk_size: int = 1500,
+    similarity_threshold: float = 0.8,  # Increased for better semantic coherence
+    target_chunk_size: int = 600,       # Reduced from 1500 for better focus
+    overlap_tokens: int = 150,          # Overlap between chunks
+    min_chunk_size: int = 500,          # Minimum viable chunk size
 ) -> Tuple[List[Dict], np.ndarray]:
     if not pages_data:
         return [], np.array([])
+    
     all_paragraphs = []
     for page_text, page_num in pages_data:
         all_paragraphs.extend(smart_paragraph_split(page_text, page_num))
+    
     if not all_paragraphs:
         return [], np.array([])
-    print(f"Starting async-batched chunking on {len(all_paragraphs)} paragraphs...")
+    
+    print(f"Starting improved semantic chunking on {len(all_paragraphs)} paragraphs...")
     paragraph_texts = [p[0] for p in all_paragraphs]
+    
+    # Batch embedding generation
     all_embeddings: List[np.ndarray] = []
     batch_size = 256
     for i in range(0, len(paragraph_texts), batch_size):
@@ -172,30 +170,204 @@ async def optimized_semantic_chunk_text(
         emb = embedding_manager.encode_batch(batch)
         all_embeddings.append(emb)
         await asyncio.sleep(0)
+    
     para_embs = np.vstack(all_embeddings)
+    
+    # Calculate cosine similarities between consecutive paragraphs
     sim = np.einsum('ij,ij->i', para_embs[:-1], para_embs[1:])
+    
     chunks: List[Dict] = []
     chunk_embs: List[np.ndarray] = []
-    current_chunk_texts = [all_paragraphs[0][0]]
-    current_chunk_indices = [0]
-    current_page_num = all_paragraphs[0][1]
-    for idx, similarity in enumerate(sim):
-        next_paragraph_text, next_page_num = all_paragraphs[idx + 1]
-        if similarity > similarity_threshold and sum(len(t) for t in current_chunk_texts) < max_chunk_size and next_page_num == current_page_num:
-            current_chunk_texts.append(next_paragraph_text)
-            current_chunk_indices.append(idx + 1)
-        else:
+    
+    # Enhanced chunking algorithm with overlap and better size management
+    i = 0
+    while i < len(all_paragraphs):
+        current_chunk_texts = []
+        current_chunk_indices = []
+        current_page_num = all_paragraphs[i][1]
+        current_size = 0
+        
+        # Build chunk starting from current position
+        j = i
+        while j < len(all_paragraphs):
+            paragraph_text, page_num = all_paragraphs[j]
+            paragraph_size = len(paragraph_text)
+            
+            # Check if we should add this paragraph to current chunk
+            should_add = True
+            
+            # Size constraint
+            if current_size + paragraph_size > target_chunk_size and current_chunk_texts:
+                should_add = False
+            
+            # Page boundary constraint (optional - can be relaxed for better chunks)
+            if page_num != current_page_num and current_chunk_texts:
+                # Allow cross-page chunks if similarity is very high
+                if j > 0 and j-1 < len(sim) and sim[j-1] < similarity_threshold:
+                    should_add = False
+            
+            # Semantic similarity constraint
+            if j > i and j-1 < len(sim) and sim[j-1] < similarity_threshold and current_chunk_texts:
+                # If we have enough content, break the chunk
+                if current_size >= min_chunk_size:
+                    should_add = False
+            
+            if not should_add:
+                break
+                
+            current_chunk_texts.append(paragraph_text)
+            current_chunk_indices.append(j)
+            current_size += paragraph_size
+            current_page_num = page_num  # Update to latest page
+            j += 1
+        
+        # Create chunk if we have content
+        if current_chunk_texts:
             chunk_text = "\n\n".join(current_chunk_texts)
             avg_emb = np.mean(para_embs[current_chunk_indices], axis=0)
-            chunks.append({"text": chunk_text, "metadata": {"page": current_page_num}})
+            
+            # Enhanced metadata
+            start_page = all_paragraphs[current_chunk_indices[0]][1]
+            end_page = all_paragraphs[current_chunk_indices[-1]][1]
+            
+            chunk_metadata = {
+                "page": start_page,
+                "end_page": end_page if end_page != start_page else start_page,
+                "paragraph_count": len(current_chunk_texts),
+                "char_count": len(chunk_text),
+                "chunk_id": len(chunks)
+            }
+            
+            chunks.append({
+                "text": chunk_text, 
+                "metadata": chunk_metadata
+            })
             chunk_embs.append(avg_emb)
-            current_chunk_texts = [next_paragraph_text]
-            current_chunk_indices = [idx + 1]
-            current_page_num = next_page_num
-    if current_chunk_texts:
-        chunk_text = "\n\n".join(current_chunk_texts)
-        avg_emb = np.mean(para_embs[current_chunk_indices], axis=0)
-        chunks.append({"text": chunk_text, "metadata": {"page": current_page_num}})
-        chunk_embs.append(avg_emb)
-    print(f"Successfully created {len(chunks)} semantic chunks with pre-computed embeddings.")
+        
+        # Calculate next starting position with overlap
+        if current_chunk_indices:
+            # Find overlap starting point
+            overlap_chars = 0
+            overlap_start_idx = len(current_chunk_indices) - 1
+            
+            # Work backwards to find overlap boundary
+            for k in range(len(current_chunk_indices) - 1, -1, -1):
+                para_idx = current_chunk_indices[k]
+                para_text = all_paragraphs[para_idx][0]
+                
+                if overlap_chars + len(para_text) <= overlap_tokens:
+                    overlap_chars += len(para_text)
+                    overlap_start_idx = k
+                else:
+                    break
+            
+            # Move to the overlap position, but ensure we make progress
+            next_i = current_chunk_indices[overlap_start_idx]
+            if next_i <= i:  # Ensure we always make progress
+                next_i = i + max(1, len(current_chunk_indices) // 2)
+            
+            i = min(next_i, len(all_paragraphs))
+        else:
+            i += 1  # Fallback: move to next paragraph
+    
+    if not chunks:
+        print("Warning: No chunks were created. Using fallback chunking...")
+        # Fallback: create simple chunks without semantic analysis
+        return await _fallback_chunking(all_paragraphs, embedding_manager, target_chunk_size)
+    
+    print(f"Successfully created {len(chunks)} semantic chunks with overlap and pre-computed embeddings.")
+    
+    # Log chunk statistics for debugging
+    chunk_sizes = [len(chunk['text']) for chunk in chunks]
+    print(f"Chunk size stats - Min: {min(chunk_sizes)}, Max: {max(chunk_sizes)}, Avg: {sum(chunk_sizes)//len(chunk_sizes)}")
+    
     return chunks, np.vstack(chunk_embs)
+
+
+async def _fallback_chunking(
+    all_paragraphs: List[Tuple[str, int]], 
+    embedding_manager: OptimizedEmbeddingManager,
+    target_chunk_size: int
+) -> Tuple[List[Dict], np.ndarray]:
+    """Fallback chunking when semantic chunking fails"""
+    
+    chunks = []
+    chunk_embs = []
+    current_chunk = ""
+    current_page = all_paragraphs[0][1] if all_paragraphs else 1
+    
+    for para_text, page_num in all_paragraphs:
+        if len(current_chunk) + len(para_text) > target_chunk_size and current_chunk:
+            # Create chunk
+            emb = embedding_manager.encode_batch([current_chunk])
+            chunks.append({
+                "text": current_chunk.strip(),
+                "metadata": {"page": current_page, "chunk_id": len(chunks)}
+            })
+            chunk_embs.append(emb[0])
+            
+            # Start new chunk with overlap (last 100 chars)
+            overlap = current_chunk[-100:] if len(current_chunk) > 100 else ""
+            current_chunk = overlap + "\n\n" + para_text
+            current_page = page_num
+        else:
+            if current_chunk:
+                current_chunk += "\n\n" + para_text
+            else:
+                current_chunk = para_text
+                current_page = page_num
+    
+    # Add final chunk
+    if current_chunk.strip():
+        emb = embedding_manager.encode_batch([current_chunk.strip()])
+        chunks.append({
+            "text": current_chunk.strip(),
+            "metadata": {"page": current_page, "chunk_id": len(chunks)}
+        })
+        chunk_embs.append(emb[0])
+    
+    return chunks, np.vstack(chunk_embs) if chunk_embs else np.array([])
+
+
+def smart_paragraph_split(text: str, page_num: int, min_paragraph_length: int = 50) -> List[Tuple[str, int]]:
+    """Enhanced paragraph splitting with better heuristics"""
+    
+    # First try double newlines (traditional paragraphs)
+    paragraphs = text.split('\n\n')
+    
+    result: List[Tuple[str, int]] = []
+    
+    for para in paragraphs:
+        para = para.strip()
+        
+        # Skip very short paragraphs
+        if len(para) < min_paragraph_length:
+            continue
+            
+        # If paragraph is very long, try to split on single newlines
+        if len(para) > 2000:
+            sub_paragraphs = para.split('\n')
+            current_sub_chunk = ""
+            
+            for sub_para in sub_paragraphs:
+                sub_para = sub_para.strip()
+                if not sub_para:
+                    continue
+                    
+                if len(current_sub_chunk) + len(sub_para) > 1000 and current_sub_chunk:
+                    if len(current_sub_chunk) >= min_paragraph_length:
+                        result.append((current_sub_chunk, page_num))
+                    current_sub_chunk = sub_para
+                else:
+                    if current_sub_chunk:
+                        current_sub_chunk += "\n" + sub_para
+                    else:
+                        current_sub_chunk = sub_para
+            
+            # Add remaining sub-chunk
+            if current_sub_chunk and len(current_sub_chunk) >= min_paragraph_length:
+                result.append((current_sub_chunk, page_num))
+        else:
+            result.append((para, page_num))
+    
+    return result

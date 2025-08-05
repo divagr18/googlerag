@@ -328,7 +328,7 @@ async def answer_question_orchestrator(
     print(f"Reranking took {t_rerank_end - t_rerank_start:.2f}s.")
 
     # You are correct, the 8 chunks are the top 8 from the reranked list, not random.
-    final_chunks = reranked_chunks[:8]
+    final_chunks = reranked_chunks[:6]
 
     context_parts = []
     for chunk in final_chunks:
