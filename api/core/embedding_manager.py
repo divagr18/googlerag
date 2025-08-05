@@ -19,7 +19,7 @@ class OptimizedEmbeddingManager:
         self.model = SentenceTransformer(model_name, device=self.device,trust_remote_code=True)
         
         # Optimize for inference
-        if self.device == "cuda":
+        if self.device == "cuda": 
             self.model.half()  # Use FP16 for 2x speed improvement on RTX 4060
             torch.backends.cudnn.benchmark = True
     

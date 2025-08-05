@@ -35,7 +35,7 @@ ANSWER_SEMAPHORE = asyncio.Semaphore(20)
 
 
 try:
-    reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2')
     print("✅ Reranker model loaded successfully.")
 except Exception as e:
     print(f"⚠️ Could not load reranker model: {e}. Reranking will be disabled.")
@@ -182,7 +182,7 @@ IMPORTANT: Reply in plain text only. Do not use quotation marks around any words
 1.  **Analyze the Evidence:** Carefully read all the provided evidence and identify the parts that directly answer the user's question.
 2.  **Synthesize a Factual Answer:** Construct a comprehensive answer by combining the relevant information. Avoid adding any information that is not present in the evidence in this step.
 3.  **Impersonal and Direct Tone:** Your tone must be that of a factual database. Get straight to the point. Answer the question asked directly, don't infodump but also ensure the answer is rooted in the relevant context. You MUST provide clause/subclause/section references in their exact wordings wherever applicable. If mentioning a page, must say "page x of the document" not just "page 18." Try to limit your answer to 2-3 sentences.
-4.  **Handle Missing Information:** If the provided evidence does not contain the information needed to answer the question, you MUST first try to respond with your own knowledge if it's something that is a universal truth, such as the capital of Australia etc. If you still cannot, respond with the a single, exact phrase: "I could not find relevant information in the document."
+4.  **Handle Missing Information:** If the provided evidence does not contain the information needed to answer the question, you MUST respond with the a single, exact phrase: "I could not find relevant information in the document."
 5.  **Be Smart :**  Use your intellect to consider synonyms, related concepts, and alternative phrasings that might be relevant to the question. If the question is about a specific term or concept, ensure you understand its meaning in the context of the evidence.
 6.  **Ground your answers :** Sometimes the data in the document may be extremely incorrect and going against a universal truth. In such cases, you must state what the document says, but also state that it is incorrect and provide the correct information.
 Based on these instructions, provide the final answer to the user's question.
@@ -243,9 +243,42 @@ async def rerank_chunks(query: str, chunks: List[Dict]) -> List[Dict]:
     sorted_chunks_with_scores = sorted(chunk_with_scores, key=lambda x: x[1], reverse=True)
     
     return [chunk for chunk, score in sorted_chunks_with_scores]
+def _reciprocal_rank_fusion(
+    search_results_lists: List[List[Tuple[Dict, float]]], 
+    k: int = 60
+) -> List[Dict]:
+    """
+    Performs Reciprocal Rank Fusion on a list of search result lists.
+    The 'k' parameter is a constant used in the RRF formula to mitigate the impact of high ranks.
+    """
+    # A dictionary to hold the fused scores for each unique chunk text
+    fused_scores = {}
+    
+    # A map to quickly retrieve the full chunk dictionary from its text content
+    chunk_map = {
+        chunk['text']: chunk 
+        for results_list in search_results_lists 
+        for chunk, score in results_list
+    }
 
-# --- CRITICAL BUG FIX: The return type must be a Tuple to match what hackrx.py expects.
-# The original code returned only a string, which would cause a "too many values to unpack" error.
+    # Iterate through each list of search results
+    for results_list in search_results_lists:
+        # Iterate through each chunk in the list, with its rank
+        for rank, (chunk, score) in enumerate(results_list):
+            text = chunk['text']
+            if text not in fused_scores:
+                fused_scores[text] = 0
+            # The RRF formula: 1 / (k + rank)
+            # We add to the score if the chunk appears in multiple lists
+            fused_scores[text] += 1 / (k + rank)
+
+    # Sort the chunks based on their final fused scores in descending order
+    sorted_texts = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+    
+    # Return the full chunk dictionaries in the new, intelligently fused order
+    return [chunk_map[text] for text, score in sorted_texts]
+
+
 async def answer_question_orchestrator(
     knowledge_base: RequestKnowledgeBase, 
     query_strategy_data: Dict,
@@ -262,38 +295,39 @@ async def answer_question_orchestrator(
         for search_type, query_text in queries.items():
             query_type, _ = QueryClassifier.classify_query(original_question)
             fusion_weights = get_dynamic_fusion_weights(query_type, search_type)
-            search_query = "search_query: " + query_text
-            search_tasks.append(knowledge_base.search(search_query, k=k_rerank_candidates, fusion_weights=fusion_weights))
+            search_tasks.append(knowledge_base.search(query_text, k=k_rerank_candidates, fusion_weights=fusion_weights))
     elif isinstance(queries, list):
         print(f"Executing 'decompose' strategy for: {original_question[:50]}...")
         for sub_q in queries:
             enhanced_sub_queries = generate_fallback_queries(sub_q, "general")
             query_type, _ = QueryClassifier.classify_query(sub_q)
-            direct_query = "search_query: " + enhanced_sub_queries['direct']
-            expanded_query = "search_query: " + enhanced_sub_queries['expanded']
+            direct_query = enhanced_sub_queries['direct']
+            expanded_query = enhanced_sub_queries['expanded']
             search_tasks.append(knowledge_base.search(direct_query, k=int(k_rerank_candidates/2), fusion_weights=get_dynamic_fusion_weights(query_type, 'direct')))
             search_tasks.append(knowledge_base.search(expanded_query, k=int(k_rerank_candidates/2), fusion_weights=get_dynamic_fusion_weights(query_type, 'expanded')))
     else:
         agent_logger.error(f"Unknown query structure for question: {original_question}. Falling back to simple search.")
-        search_query = "search_query: " + original_question
-        search_tasks.append(knowledge_base.search(search_query, k=k_rerank_candidates, fusion_weights=(0.5, 0.5)))
+        search_tasks.append(knowledge_base.search(original_question, k=k_rerank_candidates, fusion_weights=(0.5, 0.5)))
 
+    # --- UPDATED: This section now uses RRF for intelligent result merging ---
     search_results_list = await asyncio.gather(*search_tasks)
-    candidate_chunks_map = {chunk['text']: chunk for result in search_results_list for chunk, score in result}
-    candidate_chunks = list(candidate_chunks_map.values())
+    
+    # Instead of a simple set union, we use RRF to intelligently merge the ranked lists.
+    fused_chunks = _reciprocal_rank_fusion(search_results_list)
 
-    if not candidate_chunks:
+    if not fused_chunks:
         agent_logger.warning(f"No context found for question: {original_question}")
-        # --- FIX: Return a tuple to match the function signature ---
         return "I could not find relevant information in the document.", []
     
-    print(f"Retrieved {len(candidate_chunks)} unique candidates for reranking.")
+    print(f"Retrieved and fused {len(fused_chunks)} unique candidates for reranking.")
 
     t_rerank_start = time.perf_counter()
-    reranked_chunks = await rerank_chunks(original_question, candidate_chunks)
+    # The reranker now receives a single, high-quality, pre-sorted list from RRF.
+    reranked_chunks = await rerank_chunks(original_question, fused_chunks)
     t_rerank_end = time.perf_counter()
     print(f"Reranking took {t_rerank_end - t_rerank_start:.2f}s.")
 
+    # You are correct, the 8 chunks are the top 8 from the reranked list, not random.
     final_chunks = reranked_chunks[:8]
 
     context_parts = []
@@ -306,7 +340,6 @@ async def answer_question_orchestrator(
     print(f"Aggregated {len(final_chunks)} reranked chunks for synthesis.")
     final_answer = await synthesize_answer_from_context(original_question, aggregated_context)
     
-    # --- FIX: Return a tuple to match the function signature ---
     final_context_list = [chunk['text'] for chunk in final_chunks]
     return final_answer, final_context_list
 
