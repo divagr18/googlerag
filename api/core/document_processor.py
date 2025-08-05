@@ -11,12 +11,19 @@ import numpy as np
 import fitz  # PyMuPDF
 import httpx
 from .embedding_manager import OptimizedEmbeddingManager
-# --- NEW: Import the docx library ---
 import docx
+import pandas as pd
+# --- NEW: Imports for Image OCR ---
+from PIL import Image
+import pytesseract
 from httpx import AsyncHTTPTransport
 
-# Thread pool for CPU-bound tasks like PDF page parsing
+# Thread pool for CPU-bound tasks like file parsing and OCR
 cpu_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
+
+# --- Optional: If Tesseract is not in your system's PATH, uncomment and set the path here ---
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
 
 async def stream_document(url: str) -> AsyncIterator[bytes]:
     transport = AsyncHTTPTransport(retries=3)
@@ -56,18 +63,41 @@ async def _extract_text_from_pdf_stream(pdf_stream: io.BytesIO) -> List[Tuple[st
     pages_data = await asyncio.gather(*tasks)
     return pages_data
 
-# --- NEW: Helper function to extract text from a DOCX file stream ---
 def _extract_text_from_docx_stream(docx_stream: io.BytesIO) -> List[Tuple[str, int]]:
-    """
-    Extracts text from a DOCX file stream. All text is assigned to page 1.
-    """
     try:
         document = docx.Document(docx_stream)
         full_text = "\n".join([para.text for para in document.paragraphs])
-        # DOCX files are not paginated, so we return all text as a single "page".
         return [(full_text, 1)]
     except Exception as e:
         raise ValueError(f"Failed to process DOCX file: {e}")
+
+def _extract_text_from_xlsx_stream(xlsx_stream: io.BytesIO) -> List[Tuple[str, int]]:
+    try:
+        sheets = pd.read_excel(xlsx_stream, sheet_name=None)
+        full_text = []
+        for sheet_name, df in sheets.items():
+            sheet_header = f"Sheet: {sheet_name}\n"
+            sheet_content = df.to_csv(index=False)
+            full_text.append(sheet_header + sheet_content)
+        return [("\n\n".join(full_text), 1)]
+    except Exception as e:
+        raise ValueError(f"Failed to process XLSX file: {e}")
+
+# --- NEW: Helper function to extract text from an image stream using OCR ---
+def _extract_text_from_image_stream(image_stream: io.BytesIO) -> List[Tuple[str, int]]:
+    """
+    Extracts text from an image file stream using Tesseract OCR.
+    All text is assigned to page 1.
+    """
+    try:
+        # Open the image from the byte stream
+        image = Image.open(image_stream)
+        # Use pytesseract to perform OCR
+        text = pytesseract.image_to_string(image)
+        # Return the extracted text as a single "page"
+        return [(text, 1)]
+    except Exception as e:
+        raise ValueError(f"Failed to process image file with OCR: {e}")
 
 async def process_document_stream(
     url: str,
@@ -75,10 +105,9 @@ async def process_document_stream(
 ) -> List[Tuple[str, int]]:
     """
     Processes a document from a stream, returning a list of (text, page_number) tuples.
-    Handles PDF, DOCX, and plain text. Rejects other types.
+    Handles PDF, DOCX, XLSX, images (PNG, JPG, etc.), and plain text. Rejects other types.
     """
     path = urlparse(url).path
-    # Use a default extension of .txt if none is found
     file_type = os.path.splitext(path)[1].lower() or ".txt"
 
     document_bytes_io = io.BytesIO()
@@ -86,22 +115,30 @@ async def process_document_stream(
         document_bytes_io.write(chunk)
     document_bytes_io.seek(0)
 
-    # --- UPDATED: Added logic for .docx and explicit rejection of other types ---
+    loop = asyncio.get_running_loop()
+    
+    # --- UPDATED: Added logic for image files ---
+    image_formats = ['.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.gif']
+
     if file_type == '.pdf':
         return await _extract_text_from_pdf_stream(document_bytes_io)
     elif file_type == '.docx':
-        # Run the synchronous docx parsing in a thread to avoid blocking
-        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             cpu_executor, _extract_text_from_docx_stream, document_bytes_io
         )
+    elif file_type == '.xlsx':
+        return await loop.run_in_executor(
+            cpu_executor, _extract_text_from_xlsx_stream, document_bytes_io
+        )
+    elif file_type in image_formats:
+        return await loop.run_in_executor(
+            cpu_executor, _extract_text_from_image_stream, document_bytes_io
+        )
     elif file_type in ['.txt', '.md', '.csv']:
-        # For plain text, return all content with page number 1
         text = document_bytes_io.read().decode('utf-8', errors='ignore')
         return [(text, 1)]
     else:
-        # Explicitly reject unsupported file types
-        raise ValueError(f"Unsupported file type: '{file_type}'. Please provide a PDF, DOCX, or TXT file.")
+        raise ValueError(f"Unsupported file type: '{file_type}'. Please provide a supported document or image file.")
 
 # ... (rest of the file is unchanged) ...
 def smart_paragraph_split(text: str, page_num: int) -> List[Tuple[str, int]]:

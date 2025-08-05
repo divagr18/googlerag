@@ -1,3 +1,5 @@
+# api/core/vector_store.py
+
 import numpy as np
 import faiss
 import asyncio
@@ -23,7 +25,6 @@ class RequestKnowledgeBase:
         use_gpu: bool = True
     ):
         self.manager = embedding_manager
-        # --- UPDATED: self.chunks now stores dictionaries ---
         self.chunks: List[Dict] = []
         self.faiss_index = None
         self.bm25_index: BM25Okapi = None
@@ -33,7 +34,6 @@ class RequestKnowledgeBase:
 
     async def _build_bm25_parallel(self, chunks: List[Dict]):
         loop = asyncio.get_event_loop()
-        # Tokenize the 'text' part of each chunk dictionary
         tasks = [loop.run_in_executor(cpu_executor, _tokenize_doc, c['text']) for c in chunks]
         tokenized = await asyncio.gather(*tasks)
         self.bm25_index = BM25Okapi(tokenized)
@@ -66,14 +66,21 @@ class RequestKnowledgeBase:
             self._build_faiss_async(precomputed_embeddings)
         )
 
-    # --- UPDATED: Search now returns a list of (chunk_dict, score) tuples ---
     async def search(
         self,
         query: str,
         k: int = 5,
         fusion_weights: Tuple[float, float] = (0.4, 0.6)
     ) -> List[Tuple[Dict, float]]:
-        key = f"{query}_{k}_{fusion_weights}"
+        # --- FIX: Safeguard against empty knowledge base ---
+        if not self.chunks:
+            return []
+
+        # --- FIX: Cap the value of k to prevent out-of-bounds errors ---
+        # This is the critical fix for the "kth out of bounds" error.
+        effective_k = min(k, len(self.chunks))
+
+        key = f"{query}_{effective_k}_{fusion_weights}"
         if key in self.cache:
             return self.cache[key]
 
@@ -90,10 +97,12 @@ class RequestKnowledgeBase:
             bm25_res = {}
             if tok and self.bm25_index:
                 scores = self.bm25_index.get_scores(tok)
-                top_idx = np.argpartition(scores, -k)[-k:]
+                # --- FIX: Use effective_k for the search ---
+                top_idx = np.argpartition(scores, -effective_k)[-effective_k:]
                 bm25_res = {i: scores[i] for i in top_idx if scores[i] > 0}
 
-            faiss_k = min(k * 2, len(self.chunks))
+            # --- FIX: Use effective_k for the FAISS search as well for consistency ---
+            faiss_k = min(effective_k * 2, len(self.chunks))
             D, I = self.faiss_index.search(q_emb, faiss_k)
             faiss_res = {int(idx): float(score) for idx, score in zip(I[0], D[0]) if idx != -1 and score > 0}
 
@@ -106,8 +115,8 @@ class RequestKnowledgeBase:
                 combined[idx] = fusion_weights[0] * b + fusion_weights[1] * f
 
             sorted_idx = sorted(combined.items(), key=lambda x: -x[1])
-            # Return the chunk dictionary and its score
-            results = [(self.chunks[i], combined[i]) for i, _ in sorted_idx[:k]]
+            # --- FIX: Use effective_k to slice the final results ---
+            results = [(self.chunks[i], combined[i]) for i, _ in sorted_idx[:effective_k]]
 
             if len(self.cache) > 128:
                 self.cache.pop(next(iter(self.cache)))
