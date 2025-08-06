@@ -17,6 +17,7 @@ import pandas as pd
 from PIL import Image
 import pytesseract
 from httpx import AsyncHTTPTransport
+from pptx import Presentation
 
 # Thread pool for CPU-bound tasks like file parsing and OCR
 cpu_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
@@ -98,7 +99,35 @@ def _extract_text_from_image_stream(image_stream: io.BytesIO) -> List[Tuple[str,
         return [(text, 1)]
     except Exception as e:
         raise ValueError(f"Failed to process image file with OCR: {e}")
+def _extract_text_from_pptx_stream(pptx_stream: io.BytesIO) -> List[Tuple[str, int]]:
+    """
+    Extracts text from each slide of a PowerPoint file stream.
+    Each slide is treated as a separate "page".
+    """
+    try:
+        presentation = Presentation(pptx_stream)
+        pages_data = []
+        for i, slide in enumerate(presentation.slides):
+            slide_texts = []
+            # Extract text from all shapes on the slide
+            for shape in slide.shapes:
+                if not shape.has_text_frame:
+                    continue
+                for paragraph in shape.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        slide_texts.append(run.text)
+            
+            # Extract text from the notes slide, if it exists
+            if slide.has_notes_slide:
+                notes_text = slide.notes_slide.notes_text_frame.text
+                if notes_text.strip():
+                    slide_texts.append("\n--- Notes ---\n" + notes_text)
 
+            full_slide_text = "\n".join(slide_texts)
+            pages_data.append((full_slide_text, i + 1)) # Use 1-based indexing for page number
+        return pages_data
+    except Exception as e:
+        raise ValueError(f"Failed to process PPTX file: {e}")
 async def process_document_stream(
     url: str,
     document_iterator: AsyncIterator[bytes]
@@ -125,6 +154,10 @@ async def process_document_stream(
     elif file_type == '.docx':
         return await loop.run_in_executor(
             cpu_executor, _extract_text_from_docx_stream, document_bytes_io
+        )
+    elif file_type == '.pptx':
+        return await loop.run_in_executor(
+            cpu_executor, _extract_text_from_pptx_stream, document_bytes_io
         )
     elif file_type == '.xlsx':
         return await loop.run_in_executor(

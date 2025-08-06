@@ -64,7 +64,7 @@ def validate_file_type(url: str) -> None:
     file_ext = os.path.splitext(path)[1].lower() or ".txt"
     
     # Define all supported formats
-    supported_document_formats = ['.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv']
+    supported_document_formats = ['.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv','.pptx']
     supported_image_formats = ['.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.gif', '.webp']
     all_supported_formats = supported_document_formats + supported_image_formats
     
@@ -165,10 +165,9 @@ async def run_submission(request: RunRequest = Body(...)):
 
     # --- FIX: Catch the specific custom exception first ---
     except UnsupportedFileType as e:
-        # File type validation is a request-level error, not question-level
         error_message = f"Filetype not supported. {e}"
         print(f"🚫 {error_message}")
-        raise HTTPException(status_code=400, detail=error_message)
+        return RunResponse(answers=[error_message for _ in request.questions])
     
     except ValueError as e:
         # Catch other potential ValueErrors
