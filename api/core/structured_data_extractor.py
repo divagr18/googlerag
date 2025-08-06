@@ -1,3 +1,5 @@
+# api/core/structured_data_extractor.py
+
 import re
 from typing import List, Tuple
 
@@ -64,5 +66,3 @@ class QueryClassifier:
                 concepts.append(word_lower)
         
         return concepts[:5]
-
-# Removed the unused DocumentAnalyzer class
