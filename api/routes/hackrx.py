@@ -5,7 +5,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 import time
 import logging
 from urllib.parse import urlparse
@@ -23,11 +23,11 @@ if not qa_logger.handlers:
 
 # --- Core Logic Imports ---
 from api.state import ml_models
-from api.core.document_processor import stream_document, process_document_stream, optimized_semantic_chunk_text, build_enhanced_retrieval_systems
+# --- FIX: Removed unused import of build_enhanced_retrieval_systems ---
+from api.core.document_processor import stream_document, process_document_stream, optimized_semantic_chunk_text
 from api.core.vector_store import RequestKnowledgeBase
-from api.core.agent_logic import answer_question_orchestrator, prepare_query_strategies_for_all_questions, answer_image_query
+from api.core.agent_logic import answer_question_orchestrator, prepare_query_strategies_for_all_questions, answer_image_query,answer_questions_batch_orchestrator
 from api.core.embedding_manager import OptimizedEmbeddingManager
-import api.core.agent_logic as agent_logic
 
 # --- API Router and Pydantic Models ---
 hackrx_router = APIRouter(prefix="/hackrx")
@@ -64,10 +64,11 @@ def validate_file_type(url: str) -> None:
     if file_ext not in supported_formats:
         raise UnsupportedFileType(f"Unsupported file type: '{file_ext}'. Supported formats are: {', '.join(supported_formats)}")
 
-async def process_document_and_build_kb(document_url: str, manager: OptimizedEmbeddingManager, enable_enhanced_retrieval: bool) -> Tuple[RequestKnowledgeBase, bool]:
+# --- FIX: Simplified function signature and logic ---
+async def process_document_and_build_kb(document_url: str, manager: OptimizedEmbeddingManager) -> RequestKnowledgeBase:
     """
-    SIMPLIFIED: This function no longer builds the multi-vector system.
-    'enhanced_available' now only refers to the query expander.
+    Builds the knowledge base. The concept of a separate "enhanced retrieval" system
+    at this stage is no longer needed with the new agentic logic.
     """
     pipeline_start_time = time.perf_counter()
     print(f"PIPE-DOC: Starting document pipeline for: {document_url}")
@@ -85,24 +86,16 @@ async def process_document_and_build_kb(document_url: str, manager: OptimizedEmb
     
     t4 = time.perf_counter()
     knowledge_base = RequestKnowledgeBase(manager)
-    enhanced_available = False
     
     if chunks:
         await knowledge_base.build(chunks, precomputed_embeddings)
-        if enable_enhanced_retrieval:
-            # Only build the query expander
-            query_exp = await build_enhanced_retrieval_systems(chunks)
-            agent_logic.query_expander = query_exp
-            enhanced_available = query_exp is not None
-            if enhanced_available:
-                print("✨ Query expansion system successfully initialized")
     else:
         print("PIPE-DOC: ⚠️ No chunks were generated from the document.")
     
     t5 = time.perf_counter()
-    print(f"PIPE-DOC: ⏱️ KB indexing (+ query expander) took: {t5 - t4:.2f}s")
+    print(f"PIPE-DOC: ⏱️ KB indexing took: {t5 - t4:.2f}s")
     print(f"PIPE-DOC: ✅ Full document pipeline complete in {time.perf_counter() - pipeline_start_time:.2f}s.")
-    return knowledge_base, enhanced_available
+    return knowledge_base
 
 @hackrx_router.post("/run", response_model=RunResponse, dependencies=[Depends(verify_token)])
 async def run_submission(request: RunRequest = Body(...)):
@@ -123,20 +116,25 @@ async def run_submission(request: RunRequest = Body(...)):
             print("📄 Document URL detected. Starting RAG pipeline.")
             manager = ml_models.get("embedding_manager")
             if not manager:
-                raise HTTPException(status_code=503, detail="Embedding manager not ready.")
+                raise HTTPException(status_code=503, detail="Embedding manager is not ready.")
             
-            doc_pipeline_task = process_document_and_build_kb(request.documents, manager, enable_enhanced_retrieval=True)
+            # --- FIX: Simplified call to process_document_and_build_kb ---
+            doc_pipeline_task = process_document_and_build_kb(request.documents, manager)
             query_strategy_task = prepare_query_strategies_for_all_questions(request.questions)
-            (knowledge_base, enhanced_available), query_strategy_data_list = await asyncio.gather(doc_pipeline_task, query_strategy_task)
+            
+            # --- FIX: Unpack only two results now ---
+            knowledge_base, query_strategy_data_list = await asyncio.gather(doc_pipeline_task, query_strategy_task)
 
             if not knowledge_base.chunks:
                 return RunResponse(answers=["Document appears to be empty or unparsable."] * len(request.questions))
 
-            tasks = [
-                answer_question_orchestrator(knowledge_base, data, use_high_k=len(request.questions) <= 15, use_enhanced_retrieval=enhanced_available)
-                for data in query_strategy_data_list
-            ]
-            results_with_context = await asyncio.gather(*tasks)
+            # --- FIX: Corrected call to answer_question_orchestrator ---
+            # Removed the obsolete 'use_enhanced_retrieval' argument.
+            results_with_context = await answer_questions_batch_orchestrator(
+                knowledge_base, 
+                query_strategy_data_list, 
+                use_high_k=len(request.questions) <= 18
+            )
             final_answers = [ans for ans, ctx in results_with_context]
 
         for question, answer in zip(request.questions, final_answers):

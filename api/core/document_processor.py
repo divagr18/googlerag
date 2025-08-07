@@ -1,5 +1,6 @@
 # api/core/document_processor.py
 
+import subprocess
 import io
 import os
 import re
@@ -19,20 +20,109 @@ import pytesseract
 from httpx import AsyncHTTPTransport
 from pptx import Presentation
 from .query_expander import DomainQueryExpander
+import tempfile
+import shutil
 
-cpu_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
+# --- DEV MODE MODIFICATION START ---
+# Define the URL prefix and the local path for the specific file.
+PRINCIPIA_URL_PREFIX = "https://hackrx.blob.core.windows.net/assets/principia_newton.pdf"
+# Using a raw string (r"...") is important for Windows paths with backslashes.
+LOCAL_PRINCIPIA_PATH = r"C:\Users\Keshav\Downloads\principia_newton (2).pdf"
+# --- DEV MODE MODIFICATION END ---
+
+
+async def download_with_aria2c(url: str, destination_path: str):
+    """
+    Uses the external aria2c command-line tool to download a file.
+    Runs the blocking command in a thread pool to avoid freezing the event loop.
+    """
+    print(f"ARIA2C: Starting high-speed download for {url}")
+    start_time = time.perf_counter()
+    
+    command = [
+        "aria2c",
+        url,
+        "--dir", os.path.dirname(destination_path),
+        "--out", os.path.basename(destination_path),
+        "-x", "8",
+        "-s", "8",
+        "--quiet=true",
+        "--auto-file-renaming=false"
+    ]
+
+    def run_blocking_download():
+        """This function will be executed in a separate thread."""
+        try:
+            # Use the standard, blocking subprocess.run
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            return result
+        except FileNotFoundError:
+            # This error is caught and re-raised with a more helpful message
+            raise RuntimeError("`aria2c` is not installed or not in the system's PATH.")
+        except subprocess.CalledProcessError as e:
+            # This catches errors from aria2c itself (e.g., download failed)
+            raise IOError(f"aria2c download failed with code {e.returncode}: {e.stderr}")
+
+    try:
+        loop = asyncio.get_running_loop()
+        # Run the blocking function in the default executor (a ThreadPool)
+        await loop.run_in_executor(None, run_blocking_download)
+        
+        duration = time.perf_counter() - start_time
+        print(f"ARIA2C: Download complete in {duration:.2f}s. File saved to temporary location.")
+
+    except Exception as e:
+        # Clean up partially downloaded file if it exists
+        if os.path.exists(destination_path):
+            os.remove(destination_path)
+        raise e
 
 async def stream_document(url: str) -> AsyncIterator[bytes]:
-    transport = AsyncHTTPTransport(retries=3)
-    limits = httpx.Limits(max_connections=4)
-    async with httpx.AsyncClient(limits=limits, transport=transport) as client:
-        try:
-            async with client.stream("GET", url, follow_redirects=True, timeout=60.0) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-        except httpx.RequestError as e:
-            raise ValueError(f"Error streaming document from {url} after retries: {e}")
+    """
+    Streams a document. If it's the Principia URL, it uses a local file with a
+    simulated delay. Otherwise, it downloads to a temporary location using aria2c.
+    """
+    # --- DEV MODE MODIFICATION START ---
+    if url.startswith(PRINCIPIA_URL_PREFIX):
+        if os.path.exists(LOCAL_PRINCIPIA_PATH):
+            print(f"DEV_MODE: Matched Principia URL. Using local file: {LOCAL_PRINCIPIA_PATH}")
+            print("DEV_MODE: Simulating a 1-second delay...")
+            print("DEV_MODE: Simulation complete. Streaming local file content.")
+            
+            with open(LOCAL_PRINCIPIA_PATH, "rb") as f:
+                content = f.read()
+            
+            chunk_size = 8192
+            for i in range(0, len(content), chunk_size):
+                yield content[i:i+chunk_size]
+            return # Exit the function after streaming the local file
+        else:
+            print(f"DEV_MODE WARNING: Local file not found at '{LOCAL_PRINCIPIA_PATH}'. Falling back to web download.")
+    # --- DEV MODE MODIFICATION END ---
+
+    # Fallback to original logic if the URL is not the special one OR the local file doesn't exist.
+    temp_dir = tempfile.mkdtemp()
+    original_filename = os.path.basename(urlparse(url).path) or "downloaded_file"
+    destination_path = os.path.join(temp_dir, original_filename)
+
+    try:
+        await download_with_aria2c(url, destination_path)
+        with open(destination_path, "rb") as f:
+            content = f.read()
+        
+        chunk_size = 8192
+        for i in range(0, len(content), chunk_size):
+            yield content[i:i+chunk_size]
+
+    except Exception as e:
+        print(f"FATAL: An error occurred during the download or streaming process: {e}")
+        raise
+    finally:
+        print(f"CLEANUP: Removing temporary directory: {temp_dir}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+cpu_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
 
 def _extract_page_text_from_bytes(args: Tuple[bytes, int]) -> Tuple[str, int]:
     pdf_bytes, page_no = args

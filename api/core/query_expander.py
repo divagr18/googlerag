@@ -36,6 +36,34 @@ class DomainQueryExpander:
         self.term_cooccurrence: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
         self.tfidf_vectorizer = None
         self.term_importance_scores: Dict[str, float] = {}
+        self.scenario_mappings = {
+            # Legal/Constitutional scenarios
+            "arrested without warrant": ["arrest", "detention", "authority", "powers", "custody", "warrant", "procedure"],
+            "job discrimination": ["employment", "equality", "discrimination", "workplace", "hiring", "opportunities"],
+            "speech restrictions": ["speech", "expression", "restrictions", "limitations", "communication", "public"],
+            "child work": ["child", "employment", "work", "factories", "protection", "age restrictions"],
+            "torture custody": ["treatment", "custody", "abuse", "rights", "dignity", "procedure"],
+            "land acquisition": ["property", "compensation", "acquisition", "ownership", "rights", "process"],
+            "religious conversion": ["religion", "conversion", "practice", "belief", "freedom", "choice"],
+            "caste discrimination": ["discrimination", "equality", "social", "treatment", "access", "opportunities"],
+            "religious place entry": ["access", "entry", "discrimination", "religious", "places", "equality"],
+            "university admission": ["education", "admission", "access", "requirements", "eligibility", "process"],
+            # Add more domains as needed - insurance, medical, etc.
+            "claim denied": ["claim", "denial", "process", "coverage", "eligibility", "benefits"],
+            "policy cancelled": ["policy", "cancellation", "termination", "coverage", "reasons", "process"]
+        }
+        
+        # General term mappings (not domain-specific)
+        self.general_term_mappings = {
+            "allowed": ["permitted", "authorized", "acceptable", "valid", "approved"],
+            "legal": ["permissible", "authorized", "valid", "acceptable", "approved"],
+            "stop": ["prevent", "halt", "block", "restrict", "prohibit"],
+            "rights": ["entitlements", "privileges", "protections", "benefits"],
+            "government": ["authority", "administration", "official", "public", "state"],
+            "job": ["employment", "work", "position", "occupation", "service"],
+            "speak": ["communicate", "express", "voice", "state", "declare"],
+            "denied": ["refused", "rejected", "declined", "withheld", "blocked"]
+        }
         
         print("🔍 Building domain-specific vocabulary...")
         self._build_vocabulary(chunk_texts)
@@ -105,6 +133,18 @@ class DomainQueryExpander:
 
     def expand_query(self, original_query: str, expansion_strategy: str = "hybrid") -> List[str]:
         query_variants = {original_query}
+        
+        # First, apply scenario mappings for hypothetical questions
+        if self._is_hypothetical_question(original_query):
+            scenario_variants = self._expand_with_scenario_mappings(original_query)
+            query_variants.update(scenario_variants)
+        
+        # Apply general term mappings
+        general_variant = self._expand_with_general_terms(original_query)
+        if general_variant != original_query:
+            query_variants.add(general_variant)
+        
+        # Then apply existing expansions
         query_terms = re.findall(r'\b\w+\b', original_query.lower())
         
         if expansion_strategy in ["acronym", "hybrid"]:
@@ -115,7 +155,56 @@ class DomainQueryExpander:
         if expansion_strategy in ["tfidf", "hybrid"]:
             query_variants.add(self._expand_with_tfidf(original_query))
         
-        return list(query_variants)[:4]
+        return list(query_variants)[:6]  # Increased limit for more variants
+    
+    def _is_hypothetical_question(self, query: str) -> bool:
+        """Check if query is a hypothetical question"""
+        hypothetical_indicators = ["if", "if my", "if someone", "if the", "suppose", "assuming"]
+        return any(indicator in query.lower() for indicator in hypothetical_indicators)
+    
+    def _expand_with_scenario_mappings(self, query: str) -> List[str]:
+        """Expand hypothetical questions with relevant concepts"""
+        variants = []
+        query_lower = query.lower()
+        
+        # Check for scenario matches
+        for scenario, concepts in self.scenario_mappings.items():
+            if any(word in query_lower for word in scenario.split()):
+                # Create focused concept query
+                concept_query = " ".join(concepts[:4])  # Top 4 concepts
+                variants.append(concept_query)
+                
+                # Create hybrid query
+                variants.append(f"{concept_query} {self._clean_hypothetical(query)}")
+                break
+        
+        # If no specific scenario match, try general expansion
+        if not variants:
+            cleaned_query = self._clean_hypothetical(query)
+            variants.append(f"provisions {cleaned_query}")
+            variants.append(f"rules {cleaned_query}")
+        
+        return variants
+    
+    def _expand_with_general_terms(self, query: str) -> str:
+        """Replace common terms with more formal/specific equivalents"""
+        expanded_query = query
+        for common_term, formal_terms in self.general_term_mappings.items():
+            if common_term in query.lower():
+                # Add the first formal equivalent
+                expanded_query = expanded_query.replace(common_term, f"{common_term} {formal_terms[0]}")
+        
+        return expanded_query
+    
+    def _clean_hypothetical(self, query: str) -> str:
+        """Remove hypothetical framing to focus on core concepts"""
+        # Remove hypothetical prefixes
+        cleaned = re.sub(r'^if\s+(i|my|someone|the)\s+', '', query.lower())
+        cleaned = re.sub(r',?\s*is that (legal|allowed|constitutional)\??$', '', cleaned)
+        cleaned = re.sub(r',?\s*can i (stop it|do something)\??$', '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        return cleaned
 
     def _expand_with_acronyms(self, query: str) -> str:
         for term, expansion in self.acronym_expansions.items():
