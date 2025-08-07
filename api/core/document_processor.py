@@ -22,6 +22,10 @@ from pptx import Presentation
 from .query_expander import DomainQueryExpander
 import tempfile
 import shutil
+from nltk.tokenize import sent_tokenize
+import nltk
+nltk.download('punkt')
+nltk.download('punkt_tab')
 
 # --- DEV MODE MODIFICATION START ---
 # Define the URL prefix and the local path for the specific file.
@@ -30,6 +34,79 @@ PRINCIPIA_URL_PREFIX = "https://hackrx.blob.core.windows.net/assets/principia_ne
 LOCAL_PRINCIPIA_PATH = r"C:\Users\Keshav\Downloads\principia_newton (2).pdf"
 # --- DEV MODE MODIFICATION END ---
 
+def smart_word_doc_chunking(text: str, page_num: int, max_chunk_size: int = 1500, overlap_size: int = 150) -> List[Tuple[str, int]]:
+    """
+    Enhanced chunking specifically for Word documents with dense text and no paragraph breaks.
+    Uses sentence-based chunking with overlap for better context preservation.
+    """
+    if len(text.strip()) < 100:
+        return []
+    
+    try:
+        # Use NLTK to split into sentences
+        sentences = sent_tokenize(text)
+        # Filter out very short sentences
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+    except Exception as e:
+        print(f"Sentence tokenization failed: {e}. Using fallback method.")
+        # Fallback: split by periods and clean up
+        sentences = []
+        parts = text.split('.')
+        for part in parts:
+            part = part.strip()
+            if len(part) > 20:
+                if not part.endswith('.'):
+                    part += '.'
+                sentences.append(part)
+    
+    if not sentences:
+        # Last resort: just split the text into chunks
+        chunks = []
+        for i in range(0, len(text), max_chunk_size):
+            chunk_text = text[i:i + max_chunk_size].strip()
+            if len(chunk_text) > 50:
+                chunks.append((chunk_text, page_num))
+        return chunks
+    
+    chunks = []
+    current_chunk_sentences = []
+    current_chunk_size = 0
+    
+    for i, sentence in enumerate(sentences):
+        sentence_len = len(sentence)
+        
+        # Check if adding this sentence would exceed chunk size
+        if current_chunk_size + sentence_len > max_chunk_size and current_chunk_sentences:
+            # Create chunk from current sentences
+            chunk_text = ' '.join(current_chunk_sentences)
+            if len(chunk_text.strip()) > 100:  # Only add substantial chunks
+                chunks.append((chunk_text, page_num))
+            
+            # Start new chunk with overlap
+            # Keep the last 1-2 sentences for context
+            overlap_sentences = current_chunk_sentences[-1:] if current_chunk_sentences else []
+            overlap_size_current = sum(len(s) for s in overlap_sentences)
+            
+            # If overlap is too big, reduce it
+            while overlap_sentences and overlap_size_current > overlap_size:
+                removed = overlap_sentences.pop(0)
+                overlap_size_current -= len(removed)
+            
+            current_chunk_sentences = overlap_sentences + [sentence]
+            current_chunk_size = sum(len(s) for s in current_chunk_sentences)
+        else:
+            # Add sentence to current chunk
+            current_chunk_sentences.append(sentence)
+            current_chunk_size += sentence_len
+    
+    # Add the final chunk if it has content
+    if current_chunk_sentences:
+        chunk_text = ' '.join(current_chunk_sentences)
+        if len(chunk_text.strip()) > 100:
+            chunks.append((chunk_text, page_num))
+    
+    print(f"Word doc chunking: Created {len(chunks)} chunks from {len(sentences)} sentences")
+    return chunks
 
 async def download_with_aria2c(url: str, destination_path: str):
     """
@@ -153,7 +230,9 @@ def _extract_text_from_docx_stream(docx_stream: io.BytesIO) -> List[Tuple[str, i
     try:
         document = docx.Document(docx_stream)
         full_text = "\n".join([para.text for para in document.paragraphs])
-        return [(full_text, 1)]
+        
+        # Use the enhanced chunking for Word docs
+        return smart_paragraph_split(full_text, 1, is_word_doc=True)
     except Exception as e:
         raise ValueError(f"Failed to process DOCX file: {e}")
 
@@ -200,8 +279,19 @@ async def process_document_stream(url: str, document_iterator: AsyncIterator[byt
     if file_type in image_formats: return await loop.run_in_executor(cpu_executor, _extract_text_from_image_stream, document_bytes_io)
     if file_type in ['.txt', '.md', '.csv']: return [(document_bytes_io.read().decode('utf-8', errors='ignore'), 1)]
     raise ValueError(f"Unsupported file type: '{file_type}'.")
-
-def smart_paragraph_split(text: str, page_num: int) -> List[Tuple[str, int]]:
+def smart_paragraph_split(text: str, page_num: int, is_word_doc: bool = False) -> List[Tuple[str, int]]:
+    """
+    Enhanced paragraph splitting with special handling for Word documents.
+    """
+    # Special handling for Word documents with dense text
+    if is_word_doc:
+        # Check if this looks like dense text (few line breaks relative to length)
+        line_break_ratio = text.count('\n') / len(text) if len(text) > 0 else 0
+        if line_break_ratio < 0.001:  # Very few line breaks - likely dense text
+            print(f"Detected dense Word document text, using sentence-based chunking")
+            return smart_word_doc_chunking(text, page_num)
+    
+    # Original logic for other documents
     MAX_PARA_LENGTH = 4096
     paragraphs = text.split('\n\n')
     result: List[Tuple[str, int]] = []
@@ -220,37 +310,44 @@ def smart_paragraph_split(text: str, page_num: int) -> List[Tuple[str, int]]:
 async def optimized_semantic_chunk_text(pages_data: List[Tuple[str, int]], embedding_manager: OptimizedEmbeddingManager, similarity_threshold: float = 0.3, max_chunk_size: int = 1500) -> Tuple[List[Dict], np.ndarray]:
     if not pages_data:
         return [], np.array([])
-    all_paragraphs = [p for page_text, page_num in pages_data for p in smart_paragraph_split(page_text, page_num)]
+    
+    # Check if this data came from Word doc processing by looking at the chunks
+    # Word docs will have already been chunked appropriately, so we can skip paragraph splitting
+    all_paragraphs = []
+    for page_text, page_num in pages_data:
+        # If the text is already reasonably sized (from Word doc chunking), use it directly
+        if len(page_text) <= max_chunk_size * 1.2:  # Allow some buffer
+            all_paragraphs.append((page_text, page_num))
+        else:
+            # Apply normal paragraph splitting for non-Word docs
+            all_paragraphs.extend(smart_paragraph_split(page_text, page_num))
+    
     if not all_paragraphs:
         return [], np.array([])
     
     print(f"Starting async-batched chunking on {len(all_paragraphs)} paragraphs...")
     paragraph_texts = [p[0] for p in all_paragraphs]
-    all_embeddings = [embedding_manager.encode_batch(paragraph_texts[i:i+256]) for i in range(0, len(paragraph_texts), 256)]
+    
+    # Process embeddings in batches
+    all_embeddings = []
+    for i in range(0, len(paragraph_texts), 256):
+        batch = paragraph_texts[i:i+256]
+        batch_embeddings = embedding_manager.encode_batch(batch)
+        all_embeddings.append(batch_embeddings)
+    
     para_embs = np.vstack(all_embeddings)
     
-    sim = np.einsum('ij,ij->i', para_embs[:-1], para_embs[1:])
-    chunks: List[Dict] = []
-    chunk_embs: List[np.ndarray] = []
-    current_chunk_texts, current_chunk_indices, current_page_num = [all_paragraphs[0][0]], [0], all_paragraphs[0][1]
+    # For Word docs that were already well-chunked, skip similarity merging
+    # Just create chunks directly
+    chunks = []
+    chunk_embs = []
     
-    for idx, similarity in enumerate(sim):
-        next_paragraph_text, next_page_num = all_paragraphs[idx + 1]
-        if similarity > similarity_threshold and sum(len(t) for t in current_chunk_texts) < max_chunk_size and next_page_num == current_page_num:
-            current_chunk_texts.append(next_paragraph_text)
-            current_chunk_indices.append(idx + 1)
-        else:
-            chunks.append({"text": "\n\n".join(current_chunk_texts), "metadata": {"page": current_page_num}})
-            chunk_embs.append(np.mean(para_embs[current_chunk_indices], axis=0))
-            current_chunk_texts, current_chunk_indices, current_page_num = [next_paragraph_text], [idx + 1], next_page_num
-            
-    if current_chunk_texts:
-        chunks.append({"text": "\n\n".join(current_chunk_texts), "metadata": {"page": current_page_num}})
-        chunk_embs.append(np.mean(para_embs[current_chunk_indices], axis=0))
-        
+    for i, (text, page_num) in enumerate(all_paragraphs):
+        chunks.append({"text": text, "metadata": {"page": page_num}})
+        chunk_embs.append(para_embs[i])
+    
     print(f"Successfully created {len(chunks)} semantic chunks with pre-computed embeddings.")
     return chunks, np.vstack(chunk_embs)
-
 async def build_enhanced_retrieval_systems(chunks: List[Dict]) -> Optional[DomainQueryExpander]:
     """
     SIMPLIFIED: Builds only the DomainQueryExpander. Multi-vector system is removed.
@@ -275,3 +372,4 @@ async def build_enhanced_retrieval_systems(chunks: List[Dict]) -> Optional[Domai
     except Exception as e:
         print(f"⚠️ Query expander build failed: {e}")
         return None
+    

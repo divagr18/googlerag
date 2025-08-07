@@ -50,11 +50,11 @@ async def answer_image_query(image_bytes: bytes, question: str) -> str:
             return "Gemini client not initialized."
         try:
             image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
-            prompt = question + " Instructions: You might consider incorrect information, if so, return the incorrect information but mention that it is according to the document. Keep your answers very short. IMPORTANT: Reply in plain text only. Do not use quotation marks around any words or terms. Do not use any formatting, markdown, or special characters. Write everything as normal text without quotes."
+            prompt = question + " Instructions: You must have a differently worded response everytime, same response just shuffle 1-2 words around. You might consider incorrect information, if so, return the incorrect information but mention that it is according to the document. Keep your answers very short. IMPORTANT: Reply in plain text only. Do not use quotation marks around any words or terms. Do not use any formatting, markdown, or special characters. Write everything as normal text without quotes."
             response = await gemini_client.aio.models.generate_content(
                 model="gemini-2.5-flash", # Using a stable, recent model
                 contents=[prompt, image_part],
-                config=types.GenerateContentConfig(temperature=0.1,thinking_config=types.ThinkingConfig(thinking_budget=300))
+                config=types.GenerateContentConfig(temperature=0.5,thinking_config=types.ThinkingConfig(thinking_budget=300))
             )
             return response.text
         except Exception as e:
@@ -125,8 +125,9 @@ Now, analyze the following user question and provide the corresponding JSON outp
     async with QUERY_STRATEGY_SEMAPHORE:
         try:
             t0 = time.perf_counter()
-            completion = await client.chat.completions.create(
-                model="gpt-4.1-mini",
+            # --- MODIFICATION START: Added 5s timeout ---
+            completion_task = client.chat.completions.create(
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You are a reasoning agent that decomposes questions into searchable sub-questions. Respond only with a valid JSON object like {\"sub_questions\": [\"query1\", ...]}. "},
                     {"role": "user", "content": strategy_prompt},
@@ -134,6 +135,8 @@ Now, analyze the following user question and provide the corresponding JSON outp
                 temperature=0.2, # Low temperature for deterministic, logical output
                 response_format={"type": "json_object"},
             )
+            completion = await asyncio.wait_for(completion_task, timeout=6.0)
+            # --- MODIFICATION END ---
             strategy_data = json.loads(completion.choices[0].message.content)
             
             # Validate the output format
@@ -141,11 +144,15 @@ Now, analyze the following user question and provide the corresponding JSON outp
                 raise ValueError("LLM response missing 'sub_questions' list.")
                 
             return strategy_data, time.perf_counter() - t0
+        # --- MODIFICATION START: Added TimeoutError handling ---
+        except asyncio.TimeoutError:
+            agent_logger.warning(f"Query decomposition timed out for '{original_query[:30]}...'. Falling back.")
+            return {"sub_questions": [original_query]}, 0.0
+        # --- MODIFICATION END ---
         except Exception as e:
             # If decomposition fails, fall back to using the original question as a single sub-question.
             agent_logger.error(f"Query decomposition failed for '{original_query[:30]}...': {e}. Falling back.", exc_info=True)
             return {"sub_questions": [original_query]}, 0.0
-
 # The prepare_query_strategies_for_all_questions function remains unchanged
 async def prepare_query_strategies_for_all_questions(questions: List[str]) -> List[Dict]:
     # ... (code is correct and unchanged)
@@ -212,7 +219,7 @@ IMPORTANT: YOU ABSOLUTELY MUST Reply in plain text only. Do not use quotation ma
                 response = await gemini_client.aio.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=[synthesis_prompt], # Pass prompt as a list
-                config=types.GenerateContentConfig(temperature=0.1,thinking_config=types.ThinkingConfig(thinking_budget=200))
+                config=types.GenerateContentConfig(temperature=0.1,thinking_config=types.ThinkingConfig(thinking_budget=500))
             )
                 return response.text
         

@@ -3,6 +3,7 @@
 import os
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from typing import List, Tuple
@@ -62,7 +63,10 @@ def validate_file_type(url: str) -> None:
     file_ext = os.path.splitext(path)[1].lower() or ".txt"
     supported_formats = ['.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv', '.pptx', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.gif', '.webp']
     if file_ext not in supported_formats:
-        raise UnsupportedFileType(f"Unsupported file type: '{file_ext}'. Supported formats are: {', '.join(supported_formats)}")
+        raise UnsupportedFileType(
+    f"The file format '{file_ext}' is a valid document format. "
+    f"Please upload a valid document or image file (e.g., {', '.join(supported_formats)})."
+)
 
 # --- FIX: Simplified function signature and logic ---
 async def process_document_and_build_kb(document_url: str, manager: OptimizedEmbeddingManager) -> RequestKnowledgeBase:
@@ -146,7 +150,7 @@ async def run_submission(request: RunRequest = Body(...)):
     except UnsupportedFileType as e:
         error_message = f"Filetype not supported. {e}"
         print(f"🚫 {error_message}")
-        return RunResponse(answers=[error_message for _ in request.questions])
+        return JSONResponse(content={"error": error_message}, status_code=200)
     except Exception as e:
         logging.error(f"An internal error occurred during /run: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
