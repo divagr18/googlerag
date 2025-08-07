@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import List, Tuple
+from typing import List
 import time
 import logging
 from urllib.parse import urlparse
 import httpx
+from langdetect import detect
+import tiktoken  # for accurate token counting
 
 # --- Logger Configuration ---
 qa_logger = logging.getLogger('qa_logger')
@@ -24,10 +26,19 @@ if not qa_logger.handlers:
 
 # --- Core Logic Imports ---
 from api.state import ml_models
-# --- FIX: Removed unused import of build_enhanced_retrieval_systems ---
-from api.core.document_processor import stream_document, process_document_stream, optimized_semantic_chunk_text
+from api.core.document_processor import (
+    stream_document,
+    process_document_stream,
+    optimized_semantic_chunk_text,
+)
 from api.core.vector_store import RequestKnowledgeBase
-from api.core.agent_logic import answer_question_orchestrator, prepare_query_strategies_for_all_questions, answer_image_query,answer_questions_batch_orchestrator
+from api.core.agent_logic import (
+    answer_question_orchestrator,
+    prepare_query_strategies_for_all_questions,
+    answer_image_query,
+    answer_questions_batch_orchestrator,
+    synthesize_answer_from_context,
+)
 from api.core.embedding_manager import OptimizedEmbeddingManager
 
 # --- API Router and Pydantic Models ---
@@ -54,26 +65,31 @@ def is_image_url(url: str) -> bool:
     file_ext = os.path.splitext(path)[1].lower()
     return file_ext in image_formats
 
-# --- Custom exception for clearer error handling ---
 class UnsupportedFileType(Exception):
     pass
 
 def validate_file_type(url: str) -> None:
     path = urlparse(url).path
     file_ext = os.path.splitext(path)[1].lower() or ".txt"
-    supported_formats = ['.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv', '.pptx', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.gif', '.webp']
+    supported_formats = [
+        '.pdf', '.docx', '.xlsx', '.txt', '.md', '.csv',
+        '.pptx', '.png', '.jpeg', '.jpg', '.bmp', '.tiff', '.gif', '.webp'
+    ]
     if file_ext not in supported_formats:
         raise UnsupportedFileType(
-    f"The file format '{file_ext}' is a valid document format. "
-    f"Please upload a valid document or image file (e.g., {', '.join(supported_formats)})."
-)
+            f"The file format '{file_ext}' is not supported. "
+            f"Please upload a valid document or image file (e.g., {', '.join(supported_formats)})."
+        )
 
-# --- FIX: Simplified function signature and logic ---
+# --- Language Utility ---
+def is_english(text: str) -> bool:
+    try:
+        return detect(text) == "en"
+    except:
+        return True
+
+# --- Document KB builder (unchanged) ---
 async def process_document_and_build_kb(document_url: str, manager: OptimizedEmbeddingManager) -> RequestKnowledgeBase:
-    """
-    Builds the knowledge base. The concept of a separate "enhanced retrieval" system
-    at this stage is no longer needed with the new agentic logic.
-    """
     pipeline_start_time = time.perf_counter()
     print(f"PIPE-DOC: Starting document pipeline for: {document_url}")
     
@@ -101,56 +117,76 @@ async def process_document_and_build_kb(document_url: str, manager: OptimizedEmb
     print(f"PIPE-DOC: ✅ Full document pipeline complete in {time.perf_counter() - pipeline_start_time:.2f}s.")
     return knowledge_base
 
+# --- /run Endpoint with token-limit & foreign-language handling ---
 @hackrx_router.post("/run", response_model=RunResponse, dependencies=[Depends(verify_token)])
 async def run_submission(request: RunRequest = Body(...)):
-    start_time = time.perf_counter()
-    try:
-        validate_file_type(request.documents)
-        print(f"✅ File type validation passed for: {request.documents}")
+    start = time.perf_counter()
+
+    # 1) Validate
+    validate_file_type(request.documents)
+
+    # 2) Load & extract raw pages
+    doc_iter = stream_document(request.documents)
+    pages_data = await process_document_stream(request.documents, doc_iter)
+    full_text = "\n\n".join(p for p,_ in pages_data).strip()
+
+    # 3) Token‐count check
+    enc = tiktoken.encoding_for_model("gpt-4")
+    if len(enc.encode(full_text)) > 4000:
+        raise HTTPException(400, "Document exceeds 4000‐token limit.")
+
+    # 4) Lang detect on doc + all questions
+    doc_sample = full_text[:1000]
+    doc_en = is_english(doc_sample)
+    qs_en = all(is_english(q) for q in request.questions)
+    use_high_k = len(request.questions) <= 18
+
+    # 5) Non‐English shortcut: direct LLM calls
+    if not doc_en or not qs_en:
+        print("🌐 Non-English detected: running synthesis on-device for all questions in parallel.")
+        # Create a synthesis task for each question
+        synthesis_tasks = [
+            synthesize_answer_from_context(q, full_text, False)
+            for q in request.questions
+        ]
+        # Run them concurrently
+        answers = await asyncio.gather(*synthesis_tasks)
+        return RunResponse(answers=answers)
+
+    # 6) English & image?
+    if is_image_url(request.documents):
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(request.documents, timeout=60.0)
+            resp.raise_for_status()
+            img_bytes = resp.content
+        answers = await asyncio.gather(*[
+            answer_image_query(img_bytes, q) for q in request.questions
+        ])
+    else:
+        # 7) Full RAG pipeline
+        manager = ml_models.get("embedding_manager")
+        if not manager:
+            raise HTTPException(503, "Embedding manager not ready.")
         
-        if is_image_url(request.documents):
-            print("🖼️ Image URL detected. Using direct vision query.")
-            async with httpx.AsyncClient() as client:
-                response = await client.get(request.documents, follow_redirects=True, timeout=60.0)
-                response.raise_for_status()
-                image_bytes = response.content
-            tasks = [answer_image_query(image_bytes, q) for q in request.questions]
-            final_answers = await asyncio.gather(*tasks)
-        else:
-            print("📄 Document URL detected. Starting RAG pipeline.")
-            manager = ml_models.get("embedding_manager")
-            if not manager:
-                raise HTTPException(status_code=503, detail="Embedding manager is not ready.")
-            
-            # --- FIX: Simplified call to process_document_and_build_kb ---
-            doc_pipeline_task = process_document_and_build_kb(request.documents, manager)
-            query_strategy_task = prepare_query_strategies_for_all_questions(request.questions)
-            
-            # --- FIX: Unpack only two results now ---
-            knowledge_base, query_strategy_data_list = await asyncio.gather(doc_pipeline_task, query_strategy_task)
+        # build KB + chunk/embeds
+        kb = await process_document_and_build_kb(request.documents, manager)
 
-            if not knowledge_base.chunks:
-                return RunResponse(answers=["Document appears to be empty or unparsable."] * len(request.questions))
+        if not kb.chunks:
+            return RunResponse(answers=["Document empty or unparsable."] * len(request.questions))
 
-            # --- FIX: Corrected call to answer_question_orchestrator ---
-            # Removed the obsolete 'use_enhanced_retrieval' argument.
-            results_with_context = await answer_questions_batch_orchestrator(
-                knowledge_base, 
-                query_strategy_data_list, 
-                use_high_k=len(request.questions) <= 18
+        # Directly use original questions (no query generation)
+        results = await asyncio.gather(*[
+            answer_question_orchestrator(
+                kb,
+                {"original_question": q, "sub_questions": [q]},
+                use_high_k=use_high_k
             )
-            final_answers = [ans for ans, ctx in results_with_context]
+            for q in request.questions
+        ])
+        answers = [ans for ans, _ in results]
 
-        for question, answer in zip(request.questions, final_answers):
-            qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
-        
-        print(f"🏁 Total request processing time: {time.perf_counter() - start_time:.2f} seconds")
-        return RunResponse(answers=final_answers)
-
-    except UnsupportedFileType as e:
-        error_message = f"Filetype not supported. {e}"
-        print(f"🚫 {error_message}")
-        return JSONResponse(content={"error": error_message}, status_code=200)
-    except Exception as e:
-        logging.error(f"An internal error occurred during /run: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
+    # 8) Log & return
+    for q,a in zip(request.questions, answers):
+        qa_logger.info(f"{q} | A: {a.replace(chr(10),' ')}")
+    print(f"⏱️ Total time: {time.perf_counter()-start:.2f}s")
+    return RunResponse(answers=answers)

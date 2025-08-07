@@ -31,7 +31,11 @@ class RequestKnowledgeBase:
         loop = asyncio.get_event_loop()
         tasks = [loop.run_in_executor(cpu_executor, _tokenize_doc, c['text']) for c in chunks]
         tokenized = await asyncio.gather(*tasks)
-        self.bm25_index = BM25Okapi(tokenized)
+        non_empty_docs = [doc for doc in tokenized if len(doc) > 0]
+        if non_empty_docs:
+            self.bm25_index = BM25Okapi(non_empty_docs)
+        else:
+            self.bm25_index = None
 
     async def _build_faiss_async(self, embeddings: np.ndarray):
         embeddings = embeddings.astype(np.float32)

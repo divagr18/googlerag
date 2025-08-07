@@ -24,8 +24,7 @@ import tempfile
 import shutil
 from nltk.tokenize import sent_tokenize
 import nltk
-nltk.download('punkt')
-nltk.download('punkt_tab')
+
 
 # --- DEV MODE MODIFICATION START ---
 # Define the URL prefix and the local path for the specific file.
