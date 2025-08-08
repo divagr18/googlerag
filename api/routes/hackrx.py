@@ -12,7 +12,6 @@ import logging
 from urllib.parse import urlparse
 import httpx
 from langdetect import detect
-import tiktoken  # for accurate token counting
 
 # --- Logger Configuration ---
 qa_logger = logging.getLogger('qa_logger')
@@ -40,6 +39,12 @@ from api.core.agent_logic import (
     synthesize_answer_from_context,
 )
 from api.core.embedding_manager import OptimizedEmbeddingManager
+
+# --- New Agno Agent Import ---
+from api.core.agno_agent import (
+    process_with_agno_agent_simple,
+    should_use_direct_processing
+)
 
 # --- API Router and Pydantic Models ---
 hackrx_router = APIRouter(prefix="/hackrx")
@@ -117,12 +122,12 @@ async def process_document_and_build_kb(document_url: str, manager: OptimizedEmb
     print(f"PIPE-DOC: ✅ Full document pipeline complete in {time.perf_counter() - pipeline_start_time:.2f}s.")
     return knowledge_base
 
-# --- /run Endpoint with token-limit & foreign-language handling ---
+# --- /run Endpoint with Agno integration and removed token limits ---
 @hackrx_router.post("/run", response_model=RunResponse, dependencies=[Depends(verify_token)])
 async def run_submission(request: RunRequest = Body(...)):
     start = time.perf_counter()
 
-    # 1) Validate
+    # 1) Validate file type
     validate_file_type(request.documents)
 
     # 2) Load & extract raw pages
@@ -130,30 +135,43 @@ async def run_submission(request: RunRequest = Body(...)):
     pages_data = await process_document_stream(request.documents, doc_iter)
     full_text = "\n\n".join(p for p,_ in pages_data).strip()
 
-    # 3) Token‐count check
-    enc = tiktoken.encoding_for_model("gpt-4")
-    if len(enc.encode(full_text)) > 4000:
-        raise HTTPException(400, "Document exceeds 4000‐token limit.")
-
-    # 4) Lang detect on doc + all questions
+    # 3) Language detection on doc + all questions FIRST  
     doc_sample = full_text[:1000]
     doc_en = is_english(doc_sample)
     qs_en = all(is_english(q) for q in request.questions)
     use_high_k = len(request.questions) <= 18
 
-    # 5) Non‐English shortcut: direct LLM calls
+    # 4) Non‐English shortcut: skip Agno completely
     if not doc_en or not qs_en:
         print("🌐 Non-English detected: running synthesis on-device for all questions in parallel.")
-        # Create a synthesis task for each question
         synthesis_tasks = [
             synthesize_answer_from_context(q, full_text, False)
             for q in request.questions
         ]
-        # Run them concurrently
         answers = await asyncio.gather(*synthesis_tasks)
+        for q, a in zip(request.questions, answers):
+            qa_logger.info(f"{q} | A: {a.replace(chr(10), ' ')}")
+        print(f"⏱️ Total time (non-English): {time.perf_counter() - start:.2f}s")
         return RunResponse(answers=answers)
 
-    # 6) English & image?
+    # 5) English doc: now decide Agno vs RAG
+    use_direct_agno = should_use_direct_processing(full_text, token_limit=2000)
+    if use_direct_agno:
+        print(f"📄 Document under 2000 tokens - using Agno agent for direct processing")
+        try:
+            answers = await process_with_agno_agent_simple(
+                request.documents, 
+                request.questions, 
+                full_text
+            )
+            for q, a in zip(request.questions, answers):
+                qa_logger.info(f"{q} | A: {a.replace(chr(10), ' ')}")
+            print(f"⏱️ Total time (Agno direct): {time.perf_counter() - start:.2f}s")
+            return RunResponse(answers=answers)
+        except Exception as e:
+            print(f"❌ Agno processing failed: {e}, falling back to regular pipeline")
+
+    # 6) English image?
     if is_image_url(request.documents):
         async with httpx.AsyncClient() as client:
             resp = await client.get(request.documents, timeout=60.0)
@@ -162,31 +180,29 @@ async def run_submission(request: RunRequest = Body(...)):
         answers = await asyncio.gather(*[
             answer_image_query(img_bytes, q) for q in request.questions
         ])
-    else:
-        # 7) Full RAG pipeline
-        manager = ml_models.get("embedding_manager")
-        if not manager:
-            raise HTTPException(503, "Embedding manager not ready.")
-        
-        # build KB + chunk/embeds
-        kb = await process_document_and_build_kb(request.documents, manager)
+        for q, a in zip(request.questions, answers):
+            qa_logger.info(f"{q} | A: {a.replace(chr(10), ' ')}")
+        print(f"⏱️ Total time (image): {time.perf_counter() - start:.2f}s")
+        return RunResponse(answers=answers)
 
-        if not kb.chunks:
-            return RunResponse(answers=["Document empty or unparsable."] * len(request.questions))
-
-        # Directly use original questions (no query generation)
-        results = await asyncio.gather(*[
-            answer_question_orchestrator(
-                kb,
-                {"original_question": q, "sub_questions": [q]},
-                use_high_k=use_high_k
-            )
-            for q in request.questions
-        ])
-        answers = [ans for ans, _ in results]
-
-    # 8) Log & return
-    for q,a in zip(request.questions, answers):
-        qa_logger.info(f"{q} | A: {a.replace(chr(10),' ')}")
-    print(f"⏱️ Total time: {time.perf_counter()-start:.2f}s")
+    # 7) Full RAG pipeline
+    print(f"📚 Document over 2000 tokens - using full RAG pipeline")
+    manager = ml_models.get("embedding_manager")
+    if not manager:
+        raise HTTPException(503, "Embedding manager not ready.")
+    kb = await process_document_and_build_kb(request.documents, manager)
+    if not kb.chunks:
+        return RunResponse(answers=["Document empty or unparsable."] * len(request.questions))
+    results = await asyncio.gather(*[
+        answer_question_orchestrator(
+            kb,
+            {"original_question": q, "sub_questions": [q]},
+            use_high_k=use_high_k
+        )
+        for q in request.questions
+    ])
+    answers = [ans for ans, _ in results]
+    for q, a in zip(request.questions, answers):
+        qa_logger.info(f"{q} | A: {a.replace(chr(10), ' ')}")
+    print(f"⏱️ Total time (RAG): {time.perf_counter() - start:.2f}s")
     return RunResponse(answers=answers)
