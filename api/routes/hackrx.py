@@ -150,7 +150,10 @@ async def run_submission(request: RunRequest = Body(...)):
             ])
             print(f"⏱️ Total time (raw text): {time.perf_counter() - start:.2f}s")
             for question, answer in zip(request.questions, answers):
-                qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                try:
+                    qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                except Exception as e:
+                    print(f"⚠️ Error logging QA pair: {e}")
             return RunResponse(answers=answers)
 
         if is_image_url(request.documents):
@@ -164,8 +167,10 @@ async def run_submission(request: RunRequest = Body(...)):
             ])
             print(f"⏱️ Total time (image): {time.perf_counter() - start:.2f}s")
             for question, answer in zip(request.questions, answers):
-                qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
-            return RunResponse(answers=answers)
+                try:
+                    qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                except Exception as e:
+                    print(f"⚠️ Error logging QA pair: {e}")
 
         # Document processing starts here
         doc_iter = stream_document(request.documents)
@@ -184,7 +189,10 @@ async def run_submission(request: RunRequest = Body(...)):
             answers = await asyncio.gather(*synthesis_tasks)
             print(f"⏱️ Total time (non-English): {time.perf_counter() - start:.2f}s")
             for question, answer in zip(request.questions, answers):
-                qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                try:
+                    qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                except Exception as e:
+                    print(f"⚠️ Error logging QA pair: {e}")
             return RunResponse(answers=answers)
 
         file_exts = [".pdf", ".docx", ".pptx", ".txt"]
@@ -197,7 +205,10 @@ async def run_submission(request: RunRequest = Body(...)):
                 answers = await process_with_agno_agent_simple(request.documents, request.questions, full_text)
                 print(f"⏱️ Total time (Agno direct): {time.perf_counter() - start:.2f}s")
                 for question, answer in zip(request.questions, answers):
-                    qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                    try:
+                        qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                    except Exception as e:
+                        print(f"⚠️ Error logging QA pair: {e}")
                 return RunResponse(answers=answers)
             except Exception as e:
                 print(f"❌ Agno processing failed: {e}, falling back to full RAG pipeline")

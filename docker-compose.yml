@@ -1,0 +1,32 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  app:
+    # Specifies that Docker Compose should build the image from the Dockerfile
+    # in the current directory.
+    build: .
+    # Names the image that will be built.
+    image: your-fastapi-app
+    # Forwards the exposed port 8000 on the container to port 8000 on the host machine.
+    # This makes the application accessible at http://localhost:8000.
+    ports:
+      - "8000:8000"
+    # Sets environment variables inside the container.
+    # It's recommended to use a .env file for sensitive data like API keys.
+    env_file:
+      - .env
+    # Sets the restart policy. "unless-stopped" ensures the container restarts
+    # automatically unless you manually stop it.
+    # Mounts the local ./qa_log.log file into the container at /app/qa_log.log.
+    # This ensures that your logs are persisted on your host machine even if the
+    # container is removed.
+    volumes:
+      - ./qa_log.log:/app/qa_log.log
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all # or specify a number, e.g., 1
+              capabilities: [ gpu ]
