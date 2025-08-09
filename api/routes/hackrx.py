@@ -19,7 +19,7 @@ if not qa_logger.handlers:
     formatter = logging.Formatter('%(asctime)s - Q: %(message)s')
     file_handler.setFormatter(formatter)
     qa_logger.addHandler(file_handler)
-    qa_logger.propagate = True
+    qa_logger.propagate = False
 
 # --- Core Logic Imports ---
 from api.state import ml_models

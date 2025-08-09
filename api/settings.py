@@ -13,7 +13,6 @@ class ApiSettings(BaseSettings):
 
     # Set to False to disable docs at /docs and /redoc
     docs_enabled: bool = True
-
     # Cors origin list to allow requests from.
     # This list is set using the set_cors_origin_list validator
     # which uses the runtime_env variable to set the
@@ -23,16 +22,8 @@ class ApiSettings(BaseSettings):
     @field_validator("cors_origin_list", mode="before")
     def set_cors_origin_list(cls, cors_origin_list, info: FieldValidationInfo):
         valid_cors = cors_origin_list or []
-
-        # Add app.agno.com to cors to allow requests from the Agno playground.
-        valid_cors.append("https://app.agno.com")
-        # Add localhost to cors to allow requests from the local environment.
         valid_cors.append("http://localhost")
-        # Add localhost:3000 to cors to allow requests from local Agent UI.
-        valid_cors.append("http://localhost:3000")
-
         return valid_cors
-
 
 # Create ApiSettings object
 api_settings = ApiSettings()

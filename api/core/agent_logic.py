@@ -464,12 +464,11 @@ async def answer_questions_batch_orchestrator(
     
     for i, (original_question, reranked_chunks) in enumerate(zip(original_questions, all_reranked_chunks)):
         if not reranked_chunks:
-            synthesis_tasks.append(
-                asyncio.create_task(
-                    asyncio.coroutine(lambda: "I could not find relevant information in the document.")()
-                )
-            )
+            async def dummy_response():
+                return "I could not find relevant information in the document."
+            synthesis_tasks.append(asyncio.create_task(dummy_response()))
             continue
+
         
         # Select final chunks
         if use_high_k:
