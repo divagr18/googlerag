@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 import numpy as np
 import fitz  # PyMuPDF
 import httpx
+import aiohttp
+
 from .embedding_manager import OptimizedEmbeddingManager
 import docx
 import pandas as pd
@@ -103,12 +105,11 @@ def smart_word_doc_chunking(text: str, page_num: int, max_chunk_size: int = 1500
 
 async def download_with_aria2c(url: str, destination_path: str):
     """
-    Uses the external aria2c command-line tool to download a file.
-    Runs the blocking command in a thread pool to avoid freezing the event loop.
+    Download a file using aria2c if available; otherwise use aiohttp as a fallback.
     """
-    print(f"ARIA2C: Starting high-speed download for {url}")
+    print(f"Starting high-speed download for {url}")
     start_time = time.perf_counter()
-    
+
     command = [
         "aria2c",
         url,
@@ -120,29 +121,38 @@ async def download_with_aria2c(url: str, destination_path: str):
         "--auto-file-renaming=false"
     ]
 
+    def aria2c_exists():
+        """Check if aria2c exists in PATH."""
+        return shutil.which("aria2c") is not None
+
     def run_blocking_download():
-        """This function will be executed in a separate thread."""
         try:
-            # Use the standard, blocking subprocess.run
             result = subprocess.run(command, capture_output=True, text=True, check=True)
             return result
-        except FileNotFoundError:
-            # This error is caught and re-raised with a more helpful message
-            raise RuntimeError("`aria2c` is not installed or not in the system's PATH.")
         except subprocess.CalledProcessError as e:
-            # This catches errors from aria2c itself (e.g., download failed)
             raise IOError(f"aria2c download failed with code {e.returncode}: {e.stderr}")
 
+    async def fallback_download():
+        """Fallback: async download using aiohttp."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                resp.raise_for_status()
+                with open(destination_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(1024 * 64):
+                        f.write(chunk)
+
     try:
-        loop = asyncio.get_running_loop()
-        # Run the blocking function in the default executor (a ThreadPool)
-        await loop.run_in_executor(None, run_blocking_download)
-        
+        if aria2c_exists():
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, run_blocking_download)
+        else:
+            print("aria2c not found, using fallback download method...")
+            await fallback_download()
+
         duration = time.perf_counter() - start_time
-        print(f"ARIA2C: Download complete in {duration:.2f}s. File saved to temporary location.")
+        print(f"Download complete in {duration:.2f}s → {destination_path}")
 
     except Exception as e:
-        # Clean up partially downloaded file if it exists
         if os.path.exists(destination_path):
             os.remove(destination_path)
         raise e

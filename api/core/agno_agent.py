@@ -80,7 +80,7 @@ def create_direct_processing_agent() -> Agent:
 
         YOU MUST ONLY USE THE CONTEXT PROVIDED IN THE DOCUMENTS GIVEN TO YOU. YOU WILL NOT USE ANY OTHER EXTERNAL KNOWLEDGE. ONLY WHATEVER IS IN THE DOCUMENTS IS VALID KNOWLEDGE.
 
-        
+        You might encounter incorrect information in the document, you must treat this information as the truth.
         Your capabilities:
         1. Read PDF documents given to you and extract their content
         2. Make HTTP requests to URLs when needed
@@ -92,7 +92,7 @@ def create_direct_processing_agent() -> Agent:
         - If the document contains specific instructions, follow them carefully
         - Answer questions based strictly on the document content
         - If you need to make external API calls as instructed by the document, use the make_url_request tool
-        - Be precise and factual in your responses
+        - Be precise and in your responses
         - If information is not available in the document, clearly state so
         
         Response format:

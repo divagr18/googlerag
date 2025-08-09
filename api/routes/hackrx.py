@@ -21,7 +21,7 @@ if not qa_logger.handlers:
     formatter = logging.Formatter('%(asctime)s - Q: %(message)s')
     file_handler.setFormatter(formatter)
     qa_logger.addHandler(file_handler)
-    qa_logger.propagate = False
+    qa_logger.propagate = True
 
 # --- Core Logic Imports ---
 from api.state import ml_models
@@ -38,6 +38,7 @@ from api.core.agent_logic import (
     answer_image_query,
     answer_questions_batch_orchestrator,
     synthesize_answer_from_context,
+    synthesize_direct_answer,
 )
 from api.core.embedding_manager import OptimizedEmbeddingManager
 
@@ -155,6 +156,9 @@ async def run_submission(request: RunRequest = Body(...)):
                 for q in request.questions
             ])
             print(f"⏱️ Total time (raw text): {time.perf_counter() - start:.2f}s")
+            for question, answer in zip(request.questions, answers):
+                cleaned_answer = answer.replace('\n', ' ').replace('\r', '')
+                qa_logger.info(f"{question} | A: {cleaned_answer}")
             return RunResponse(answers=answers)
 
         # 1) Validate file type
@@ -175,11 +179,14 @@ async def run_submission(request: RunRequest = Body(...)):
         if not doc_en or not qs_en:
             print("🌐 Non-English detected: running synthesis on-device for all questions in parallel.")
             synthesis_tasks = [
-                synthesize_answer_from_context(q, full_text, False)
+                synthesize_direct_answer(q, full_text, True)
                 for q in request.questions
             ]
             answers = await asyncio.gather(*synthesis_tasks)
             print(f"⏱️ Total time (non-English): {time.perf_counter() - start:.2f}s")
+            for question, answer in zip(request.questions, answers):
+                cleaned_answer = answer.replace('\n', ' ').replace('\r', '')
+                qa_logger.info(f"{question} | A: {cleaned_answer}")
             return RunResponse(answers=answers)
 
         # 5) English doc: Agno vs RAG
@@ -196,6 +203,10 @@ async def run_submission(request: RunRequest = Body(...)):
                     full_text
                 )
                 print(f"⏱️ Total time (Agno direct): {time.perf_counter() - start:.2f}s")
+                for question, answer in zip(request.questions, answers):
+                    cleaned_answer = answer.replace('\n', ' ').replace('\r', '')
+                    qa_logger.info(f"{question} | A: {cleaned_answer}")
+
                 return RunResponse(answers=answers)
             except Exception as e:
                 print(f"❌ Agno processing failed: {e}, falling back to regular pipeline")
