@@ -1,13 +1,11 @@
 # api/core/agent_logic.py
-
 import json
 import os
 import asyncio
 import time
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from openai import AsyncOpenAI
 from .vector_store import RequestKnowledgeBase
-from .structured_data_extractor import QueryClassifier
 from dotenv import load_dotenv
 import logging
 from sentence_transformers.cross_encoder import CrossEncoder
@@ -15,13 +13,13 @@ from google import genai
 from google.genai import types
 from collections import defaultdict
 from groq import AsyncGroq
+load_dotenv()
 
 # Initialize Groq async client
 groq_client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 # Setup logger
 agent_logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-load_dotenv()
 
 # Initialize API clients
 client = AsyncOpenAI()
@@ -36,7 +34,7 @@ except Exception as e:
 QUERY_STRATEGY_SEMAPHORE = asyncio.Semaphore(20)
 ANSWER_SEMAPHORE = asyncio.Semaphore(20)
 
-# The reranker model remains the same
+
 try:
     reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2')
     print("✅ Reranker model loaded successfully.")
@@ -77,7 +75,7 @@ async def answer_raw_text_query(raw_text: str, question: str) -> str:
             print(f"Groq raw text query failed: {e}")
             return "I was unable to analyze the document due to an internal error."
 
-# The answer_image_query function remains unchanged
+# The answer_image_query function
 async def answer_image_query(image_bytes: bytes, question: str) -> str:
     print(f"Executing direct vision query for: {question[:50]}...")
     async with ANSWER_SEMAPHORE:
@@ -96,7 +94,7 @@ async def answer_image_query(image_bytes: bytes, question: str) -> str:
             agent_logger.error(f"Gemini vision query failed: {e}", exc_info=True)
             return "I was unable to analyze the image due to an internal error."
 
-
+#strategy generation
 async def generate_query_strategy(original_query: str) -> Tuple[Dict, float]:
     """
     Analyzes a user's question and decomposes it into a series of simple,
@@ -182,7 +180,8 @@ Now, analyze the following user question and provide the corresponding JSON outp
             # If decomposition fails, fall back to using the original question as a single sub-question.
             agent_logger.error(f"Query decomposition failed for '{original_query[:30]}...': {e}. Falling back.", exc_info=True)
             return {"sub_questions": [original_query]}, 0.0
-# The prepare_query_strategies_for_all_questions function remains unchanged
+        
+#wrapper for query strategy generation
 async def prepare_query_strategies_for_all_questions(questions: List[str]) -> List[Dict]:
     print(f"🚀 Pre-processing {len(questions)} questions for query strategies...")
     t_start = time.perf_counter()
@@ -201,7 +200,7 @@ async def prepare_query_strategies_for_all_questions(questions: List[str]) -> Li
     return final_results
 
 
-# The synthesize_answer_from_context function remains unchanged
+# The synthesize_answer_from_context function
 async def synthesize_answer_from_context(original_question: str, context: str, use_high_k: bool) -> str:
     synthesis_prompt = f"""You are a world-class AI system specializing in analyzing and summarizing information from documents to answer user questions. Your response must be based *exclusively* on the provided evidence.
     IMPORTANT: YOU ABSOLUTELY MUST Reply in plain text only. Do not use quotation marks around any words or terms. Do not use any formatting, markdown, or special characters. Write everything as normal text without quotes.
@@ -252,7 +251,7 @@ MUST RESPOND IN ENGLISH AT ALL COSTS.
         
             else:
                 response_text = await client.chat.completions.create(
-                    model="gpt-5.1-mini",
+                    model="gpt-4.1-mini",
                     messages=[{"role": "user", "content": synthesis_prompt}],
                     temperature=0.1
                 )
@@ -265,7 +264,7 @@ MUST RESPOND IN ENGLISH AT ALL COSTS.
                 config=types.GenerateContentConfig(temperature=0.1,thinking_config=types.ThinkingConfig(thinking_budget=300))
             )
             return response.text
-
+#Direct answer for non english questions
 async def synthesize_direct_answer(original_question: str, context: str, use_high_k: bool) -> str:
     synthesis_prompt = f"""You are a world-class AI system specializing in analyzing and summarizing information from documents to answer user questions. Your response must be based exclusively on the provided evidence.
     IMPORTANT: Reply in plain text only. Do not use quotation marks, formatting, markdown, or special characters.
@@ -322,7 +321,7 @@ MUST RESPOND IN ENGLISH AT ALL COSTS.
             return response.text
 
         
-# The rerank_chunks and _reciprocal_rank_fusion functions remain unchanged
+# The rerank_chunks function is no longer used, it's just kept for reference
 async def rerank_chunks(query: str, chunks: List[Dict]) -> List[Dict]:
     if not reranker or not chunks:
         return chunks
@@ -474,9 +473,9 @@ async def answer_questions_batch_orchestrator(
         
         # Select final chunks
         if use_high_k:
-            final_chunks = reranked_chunks[:15]
+            final_chunks = reranked_chunks[:12]
         else:
-            final_chunks = reranked_chunks[:10]
+            final_chunks = reranked_chunks[:8]
             
         context_parts = [f"Source: Page {chunk['metadata'].get('page', 'N/A')}\nContent: {chunk['text']}" for chunk in final_chunks]
         aggregated_context = "\n\n---\n\n".join(context_parts)
@@ -496,7 +495,10 @@ async def answer_questions_batch_orchestrator(
         results.append((answer, chunk_texts))
     
     return results
-# --- UPDATED: The orchestrator now executes the decomposed sub-questions ---
+
+
+
+# The answer_question_orchestrator is no longer used, it's just kept for reference
 async def answer_question_orchestrator(
     knowledge_base: RequestKnowledgeBase, 
     query_strategy_data: Dict, 
@@ -536,9 +538,9 @@ async def answer_question_orchestrator(
     print(f"Reranking took {t_rerank_end - t_rerank_start:.2f}s.")
     if use_high_k:
     # The rest of the pipeline (context assembly, synthesis) remains the same.
-        final_chunks = reranked_chunks[:15]
+        final_chunks = reranked_chunks[:12]
     if not use_high_k:
-        final_chunks = reranked_chunks[:10]
+        final_chunks = reranked_chunks[:8]
     context_parts = [f"Source: Page {chunk['metadata'].get('page', 'N/A')}\nContent: {chunk['text']}" for chunk in final_chunks]
     aggregated_context = "\n\n---\n\n".join(context_parts)
     
@@ -546,16 +548,3 @@ async def answer_question_orchestrator(
     final_answer = await synthesize_answer_from_context(original_question, aggregated_context,use_high_k=use_high_k)
     
     return final_answer, [chunk['text'] for chunk in final_chunks]
-
-# The get_dynamic_fusion_weights function remains unchanged
-def get_dynamic_fusion_weights(query_type: str, search_type: str) -> Tuple[float, float]:
-    base_weights = {"factual": (0.6, 0.4), "comparison": (0.4, 0.6), "conditional": (0.5, 0.5), "general": (0.4, 0.6)}
-    bm25_weight, faiss_weight = base_weights.get(query_type, (0.4, 0.6))
-    if search_type == "direct":
-        bm25_weight += 0.15
-        faiss_weight -= 0.15
-    elif search_type == "expanded":
-        bm25_weight -= 0.15
-        faiss_weight += 0.15
-    total = bm25_weight + faiss_weight
-    return (bm25_weight / total, faiss_weight / total)

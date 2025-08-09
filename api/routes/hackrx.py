@@ -1,5 +1,3 @@
-# api/routes/hackrx.py
-
 import os
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Body
@@ -32,12 +30,10 @@ from api.core.document_processor import (
 )
 from api.core.vector_store import RequestKnowledgeBase
 from api.core.agent_logic import (
-    answer_question_orchestrator,
     answer_raw_text_query,
     prepare_query_strategies_for_all_questions,
     answer_image_query,
     answer_questions_batch_orchestrator,
-    synthesize_answer_from_context,
     synthesize_direct_answer,
 )
 from api.core.embedding_manager import OptimizedEmbeddingManager
@@ -94,6 +90,7 @@ def is_english(text: str) -> bool:
         return detect(text) == "en"
     except:
         return True
+
 def is_raw_text_url(url: str) -> bool:
     """Detect URLs that are not known file formats and should be treated as raw text/HTML."""
     known_exts = [
@@ -104,7 +101,7 @@ def is_raw_text_url(url: str) -> bool:
     file_ext = os.path.splitext(path)[1].lower()
     return file_ext not in known_exts
 
-# --- Document KB builder (unchanged) ---
+# --- Document KB builder ---
 async def process_document_and_build_kb(document_url: str, manager: OptimizedEmbeddingManager) -> RequestKnowledgeBase:
     pipeline_start_time = time.perf_counter()
     print(f"PIPE-DOC: Starting document pipeline for: {document_url}")
@@ -133,7 +130,7 @@ async def process_document_and_build_kb(document_url: str, manager: OptimizedEmb
     print(f"PIPE-DOC: ✅ Full document pipeline complete in {time.perf_counter() - pipeline_start_time:.2f}s.")
     return knowledge_base
 
-# --- /run Endpoint with Agno integration and removed token limits ---
+# --- /run Endpoint with restored RAG logic ---
 @hackrx_router.post("/run", response_model=RunResponse, dependencies=[Depends(verify_token)])
 async def run_submission(request: RunRequest = Body(...)):
     try:
@@ -143,13 +140,9 @@ async def run_submission(request: RunRequest = Body(...)):
         if is_raw_text_url(request.documents):
             print("📝 Raw text/HTML detected: fetching and sending directly to LLM.")
             async with httpx.AsyncClient() as client:
-                t_1 = time.perf_counter()
-                print("⏱️ Fetching raw text from...")
                 resp = await client.get(request.documents, timeout=60.0)
                 resp.raise_for_status()
                 raw_text = resp.text.strip()
-                t_2 = time.perf_counter()
-                print(f"⏱️ Fetching raw text took: {t_2 - t_1:.2f}s")
 
             answers = await asyncio.gather(*[
                 answer_raw_text_query(raw_text, q)
@@ -157,62 +150,11 @@ async def run_submission(request: RunRequest = Body(...)):
             ])
             print(f"⏱️ Total time (raw text): {time.perf_counter() - start:.2f}s")
             for question, answer in zip(request.questions, answers):
-                cleaned_answer = answer.replace('\n', ' ').replace('\r', '')
-                qa_logger.info(f"{question} | A: {cleaned_answer}")
+                qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
             return RunResponse(answers=answers)
 
-        # 1) Validate file type
-
-        # 2) Load & extract raw pages
-        doc_iter = stream_document(request.documents)
-        pages_data = await process_document_stream(request.documents, doc_iter)
-        full_text = "\n\n".join(p for p, _ in pages_data).strip()
-
-        # 3) Language detection
-        doc_sample = full_text[:1000]
-        doc_en = is_english(doc_sample)
-        qs_en = all(is_english(q) for q in request.questions)
-        use_high_k = len(request.questions) <= 18
-        use_direct_translate = should_use_direct_processing(full_text, token_limit=2000)
-
-        # 4) Non-English shortcut
-        if not doc_en or not qs_en:
-            print("🌐 Non-English detected: running synthesis on-device for all questions in parallel.")
-            synthesis_tasks = [
-                synthesize_direct_answer(q, full_text, True)
-                for q in request.questions
-            ]
-            answers = await asyncio.gather(*synthesis_tasks)
-            print(f"⏱️ Total time (non-English): {time.perf_counter() - start:.2f}s")
-            for question, answer in zip(request.questions, answers):
-                cleaned_answer = answer.replace('\n', ' ').replace('\r', '')
-                qa_logger.info(f"{question} | A: {cleaned_answer}")
-            return RunResponse(answers=answers)
-
-        # 5) English doc: Agno vs RAG
-        file_exts = [".pdf", ".docx", ".pptx", ".txt"]
-        is_supported_doc = any(ext in str(request.documents).lower() for ext in file_exts)
-        use_direct_agno = use_direct_translate and is_supported_doc
-
-        if use_direct_agno:
-            print(f"📄 Document under 2000 tokens - using Agno agent for direct processing")
-            try:
-                answers = await process_with_agno_agent_simple(
-                    request.documents,
-                    request.questions,
-                    full_text
-                )
-                print(f"⏱️ Total time (Agno direct): {time.perf_counter() - start:.2f}s")
-                for question, answer in zip(request.questions, answers):
-                    cleaned_answer = answer.replace('\n', ' ').replace('\r', '')
-                    qa_logger.info(f"{question} | A: {cleaned_answer}")
-
-                return RunResponse(answers=answers)
-            except Exception as e:
-                print(f"❌ Agno processing failed: {e}, falling back to regular pipeline")
-
-        # 6) English image?
         if is_image_url(request.documents):
+            print("🖼️ Image URL detected. Using direct vision query.")
             async with httpx.AsyncClient() as client:
                 resp = await client.get(request.documents, timeout=60.0)
                 resp.raise_for_status()
@@ -221,26 +163,70 @@ async def run_submission(request: RunRequest = Body(...)):
                 answer_image_query(img_bytes, q) for q in request.questions
             ])
             print(f"⏱️ Total time (image): {time.perf_counter() - start:.2f}s")
+            for question, answer in zip(request.questions, answers):
+                qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
             return RunResponse(answers=answers)
 
-        # 7) Full RAG pipeline
-        print(f"📚 Document over 2000 tokens - using full RAG pipeline")
+        # Document processing starts here
+        doc_iter = stream_document(request.documents)
+        pages_data = await process_document_stream(request.documents, doc_iter)
+        full_text = "\n\n".join(p for p, _ in pages_data).strip()
+
+        doc_sample = full_text[:1000]
+        doc_en = is_english(doc_sample)
+        qs_en = all(is_english(q) for q in request.questions)
+        use_high_k = len(request.questions) <= 18
+        use_direct_translate = should_use_direct_processing(full_text, token_limit=2000)
+
+        if not doc_en or not qs_en:
+            print("🌐 Non-English detected: running synthesis on-device for all questions in parallel.")
+            synthesis_tasks = [synthesize_direct_answer(q, full_text, True) for q in request.questions]
+            answers = await asyncio.gather(*synthesis_tasks)
+            print(f"⏱️ Total time (non-English): {time.perf_counter() - start:.2f}s")
+            for question, answer in zip(request.questions, answers):
+                qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+            return RunResponse(answers=answers)
+
+        file_exts = [".pdf", ".docx", ".pptx", ".txt"]
+        is_supported_doc = any(ext in str(request.documents).lower() for ext in file_exts)
+        use_direct_agno = use_direct_translate and is_supported_doc
+
+        if use_direct_agno:
+            print(f"📄 Document under 2000 tokens - using Agno agent for direct processing")
+            try:
+                answers = await process_with_agno_agent_simple(request.documents, request.questions, full_text)
+                print(f"⏱️ Total time (Agno direct): {time.perf_counter() - start:.2f}s")
+                for question, answer in zip(request.questions, answers):
+                    qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+                return RunResponse(answers=answers)
+            except Exception as e:
+                print(f"❌ Agno processing failed: {e}, falling back to full RAG pipeline")
+
+        # --- MERGED LOGIC: Full RAG pipeline with Query Decomposition and Batching ---
+        print(f"📚 Document over 2000 tokens - using full RAG pipeline with query decomposition")
         manager = ml_models.get("embedding_manager")
         if not manager:
             raise HTTPException(503, "Embedding manager not ready.")
-        kb = await process_document_and_build_kb(request.documents, manager)
-        if not kb.chunks:
-            return RunResponse(answers=["Document empty or unparsable."] * len(request.questions))
-        results = await asyncio.gather(*[
-            answer_question_orchestrator(
-                kb,
-                {"original_question": q, "sub_questions": [q]},
-                use_high_k=use_high_k
-            )
-            for q in request.questions
-        ])
-        answers = [ans for ans, _ in results]
+
+        # Concurrently build the knowledge base AND prepare the query strategies
+        doc_pipeline_task = process_document_and_build_kb(request.documents, manager)
+        query_strategy_task = prepare_query_strategies_for_all_questions(request.questions)
+        knowledge_base, query_strategy_data_list = await asyncio.gather(doc_pipeline_task, query_strategy_task)
+
+        if not knowledge_base.chunks:
+            return RunResponse(answers=["Document appears to be empty or unparsable."] * len(request.questions))
+
+        # Use the batched orchestrator which handles decomposition, RRF, and batched reranking
+        results_with_context = await answer_questions_batch_orchestrator(
+            knowledge_base,
+            query_strategy_data_list,
+            use_high_k=use_high_k
+        )
+        answers = [ans for ans, _ in results_with_context]
+
         print(f"⏱️ Total time (RAG): {time.perf_counter() - start:.2f}s")
+        for question, answer in zip(request.questions, answers):
+            qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
         return RunResponse(answers=answers)
 
     except UnsupportedFileType as e:

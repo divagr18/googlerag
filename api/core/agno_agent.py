@@ -1,14 +1,9 @@
 # api/core/agno_direct_agent.py
-
-import asyncio
 import httpx
-import json
-from typing import List, Dict, Any
+from typing import List
 from agno.agent import Agent,RunResponse
-from agno.models.google import Gemini
 from agno.tools import tool
 import tiktoken
-from urllib.parse import urlparse
 import os
 from agno.models.groq import Groq
 
@@ -126,14 +121,14 @@ async def process_small_document_with_agno(document_url: str, questions: List[st
     
     # Prepare the context with document content
     document_context = f"""
-Document URL: {document_url}
+    Document URL: {document_url}
 
-Document Content:
-{full_text}
+    Document Content:
+    {full_text}
 
-Please analyze this document and be ready to answer questions about it.
-"""
-    
+    Please analyze this document and be ready to answer questions about it.
+    """
+        
     # Process each question
     answers = []
     
@@ -141,15 +136,14 @@ Please analyze this document and be ready to answer questions about it.
         try:
             # Combine document context with the specific question
             full_prompt = f"""
-{document_context}
+            {document_context}
 
-Question: {question}
+            Question: {question}
 
-Please provide a clear, accurate answer based on the document content above.
-MUST ANSWER IN PLAIN TEXT WITHOUT ANY KIND OF FORMATTING.
+            Please provide a clear, accurate answer based on the document content above.
+            MUST ANSWER IN PLAIN TEXT WITHOUT ANY KIND OF FORMATTING.
 
-"""
-            
+            """
             # Get response from agent
             response: RunResponse = await agent.arun(full_prompt)
             print(response)

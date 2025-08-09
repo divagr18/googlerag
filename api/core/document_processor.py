@@ -1,5 +1,4 @@
 # api/core/document_processor.py
-
 import subprocess
 import io
 import os
@@ -11,23 +10,89 @@ from typing import AsyncIterator, List, Tuple, Dict, Optional
 from urllib.parse import urlparse
 import numpy as np
 import fitz  # PyMuPDF
-import httpx
 import aiohttp
+import hashlib
 
 from .embedding_manager import OptimizedEmbeddingManager
 import docx
 import pandas as pd
 from PIL import Image
 import pytesseract
-from httpx import AsyncHTTPTransport
 from pptx import Presentation
 from .query_expander import DomainQueryExpander
 import tempfile
 import shutil
 from nltk.tokenize import sent_tokenize
-import nltk
 
+# --- CACHING SYSTEM ---
+class DocumentCache:
+    """Simple in-memory cache for document processing results."""
+    
+    def __init__(self, max_size: int = 50):
+        self._cache: Dict[str, List[Tuple[str, int]]] = {}
+        self._access_times: Dict[str, float] = {}
+        self._max_size = max_size
+        print(f"📋 Document cache initialized (max_size={max_size})")
+    
+    def _get_cache_key(self, url: str) -> str:
+        """Generate a cache key from URL."""
+        return hashlib.md5(url.encode('utf-8')).hexdigest()
+    
+    def _evict_oldest(self):
+        """Remove oldest accessed item to make space."""
+        if not self._access_times:
+            return
+        
+        oldest_key = min(self._access_times.keys(), key=lambda k: self._access_times[k])
+        del self._cache[oldest_key]
+        del self._access_times[oldest_key]
+        print(f"📋 Cache evicted oldest entry: {oldest_key}")
+    
+    def get(self, url: str) -> Optional[List[Tuple[str, int]]]:
+        """Get cached document data."""
+        cache_key = self._get_cache_key(url)
+        
+        if cache_key in self._cache:
+            # Update access time
+            self._access_times[cache_key] = time.time()
+            print(f"📋 Cache HIT for {url[:50]}...")
+            return self._cache[cache_key]
+        
+        print(f"📋 Cache MISS for {url[:50]}...")
+        return None
+    
+    def set(self, url: str, pages_data: List[Tuple[str, int]]):
+        """Cache document data."""
+        cache_key = self._get_cache_key(url)
+        
+        # Make space if needed
+        while len(self._cache) >= self._max_size:
+            self._evict_oldest()
+        
+        self._cache[cache_key] = pages_data
+        self._access_times[cache_key] = time.time()
+        print(f"💾 Cached document data ({len(pages_data)} pages) for {url[:50]}...")
+    
+    def clear(self):
+        """Clear all cached data."""
+        self._cache.clear()
+        self._access_times.clear()
+        print("📋 Cache cleared")
+    
+    def stats(self) -> Dict[str, int]:
+        """Get cache statistics."""
+        return {
+            "size": len(self._cache),
+            "max_size": self._max_size,
+            "total_pages_cached": sum(len(pages) for pages in self._cache.values())
+        }
 
+# Global cache instance
+_document_cache = DocumentCache(max_size=50)
+
+def get_document_cache() -> DocumentCache:
+    """Get the global document cache instance."""
+    return _document_cache
 
 def smart_word_doc_chunking(text: str, page_num: int, max_chunk_size: int = 1500, overlap_size: int = 150) -> List[Tuple[str, int]]:
     """
@@ -159,11 +224,8 @@ async def download_with_aria2c(url: str, destination_path: str):
 
 async def stream_document(url: str) -> AsyncIterator[bytes]:
     """
-    Streams a document. If it's the Principia URL, it uses a local file with a
-    simulated delay. Otherwise, it downloads to a temporary location using aria2c.
+    Streams a document by downloading to a temporary location.
     """
-
-    # Fallback to original logic if the URL is not the special one OR the local file doesn't exist.
     temp_dir = tempfile.mkdtemp()
     original_filename = os.path.basename(urlparse(url).path) or "downloaded_file"
     destination_path = os.path.join(temp_dir, original_filename)
@@ -184,6 +246,44 @@ async def stream_document(url: str) -> AsyncIterator[bytes]:
         print(f"CLEANUP: Removing temporary directory: {temp_dir}")
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+# --- CACHED DOCUMENT PROCESSING ---
+async def process_document_stream_cached(url: str, document_iterator: Optional[AsyncIterator[bytes]] = None, use_cache: bool = True) -> List[Tuple[str, int]]:
+    """
+    Process document with caching to avoid duplicate processing.
+    
+    Args:
+        url: Document URL
+        document_iterator: Optional pre-existing iterator (if None, will create new one)
+        use_cache: Whether to use caching (default True)
+    
+    Returns:
+        List of (text, page_num) tuples
+    """
+    cache = get_document_cache()
+    
+    # Check cache first (if enabled)
+    if use_cache:
+        cached_result = cache.get(url)
+        if cached_result is not None:
+            return cached_result
+    
+    # If no iterator provided, create one
+    if document_iterator is None:
+        print(f"📥 Creating new document stream for {url[:50]}...")
+        document_iterator = stream_document(url)
+    
+    # Process the document
+    start_time = time.perf_counter()
+    pages_data = await process_document_stream(url, document_iterator)
+    process_time = time.perf_counter() - start_time
+    
+    print(f"📄 Document processing took {process_time:.2f}s ({len(pages_data)} pages)")
+    
+    # Cache the result (if enabled and successful)
+    if use_cache and pages_data:
+        cache.set(url, pages_data)
+    
+    return pages_data
 
 cpu_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
 
@@ -265,6 +365,7 @@ async def process_document_stream(url: str, document_iterator: AsyncIterator[byt
     if file_type in image_formats: return await loop.run_in_executor(cpu_executor, _extract_text_from_image_stream, document_bytes_io)
     if file_type in ['.txt', '.md', '.csv']: return [(document_bytes_io.read().decode('utf-8', errors='ignore'), 1)]
     raise ValueError(f"Unsupported file type: '{file_type}'.")
+
 def smart_paragraph_split(text: str, page_num: int, is_word_doc: bool = False) -> List[Tuple[str, int]]:
     """
     Enhanced paragraph splitting with special handling for Word documents.
@@ -297,15 +398,11 @@ async def optimized_semantic_chunk_text(pages_data: List[Tuple[str, int]], embed
     if not pages_data:
         return [], np.array([])
     
-    # Check if this data came from Word doc processing by looking at the chunks
-    # Word docs will have already been chunked appropriately, so we can skip paragraph splitting
     all_paragraphs = []
     for page_text, page_num in pages_data:
-        # If the text is already reasonably sized (from Word doc chunking), use it directly
         if len(page_text) <= max_chunk_size * 1.2:  # Allow some buffer
             all_paragraphs.append((page_text, page_num))
         else:
-            # Apply normal paragraph splitting for non-Word docs
             all_paragraphs.extend(smart_paragraph_split(page_text, page_num))
     
     if not all_paragraphs:
@@ -323,7 +420,6 @@ async def optimized_semantic_chunk_text(pages_data: List[Tuple[str, int]], embed
     
     para_embs = np.vstack(all_embeddings)
     
-    # For Word docs that were already well-chunked, skip similarity merging
     # Just create chunks directly
     chunks = []
     chunk_embs = []
@@ -334,9 +430,10 @@ async def optimized_semantic_chunk_text(pages_data: List[Tuple[str, int]], embed
     
     print(f"Successfully created {len(chunks)} semantic chunks with pre-computed embeddings.")
     return chunks, np.vstack(chunk_embs)
+
 async def build_enhanced_retrieval_systems(chunks: List[Dict]) -> Optional[DomainQueryExpander]:
     """
-    SIMPLIFIED: Builds only the DomainQueryExpander. Multi-vector system is removed.
+    Builds only the DomainQueryExpander. Multi-vector system is removed.
     """
     print("🔧 Building enhanced retrieval systems (Query Expander)...")
     start_time = time.perf_counter()
@@ -358,4 +455,12 @@ async def build_enhanced_retrieval_systems(chunks: List[Dict]) -> Optional[Domai
     except Exception as e:
         print(f"⚠️ Query expander build failed: {e}")
         return None
-    
+
+# --- UTILITY FUNCTIONS ---
+def clear_document_cache():
+    """Clear the document cache (useful for testing or memory management)."""
+    get_document_cache().clear()
+
+def get_cache_stats() -> Dict[str, int]:
+    """Get document cache statistics."""
+    return get_document_cache().stats()

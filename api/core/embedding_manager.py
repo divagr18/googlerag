@@ -1,6 +1,6 @@
 import torch
 from sentence_transformers import SentenceTransformer
-from typing import List, Optional
+from typing import List
 import numpy as np
 
 class OptimizedEmbeddingManager:
@@ -12,7 +12,7 @@ class OptimizedEmbeddingManager:
         self.batch_size = 64 if self.device == "cuda" else 16
         
         # Use faster, smaller model optimized for your GPU
-        model_name = "all-MiniLM-L6-v2"  # 22MB, very fast on RTX 4060
+        model_name = "all-MiniLM-L12-v2"  # 22MB, very fast on RTX 4060
         # Alternative: "paraphrase-MiniLM-L3-v2" for even faster processing
         
         print(f"Loading embedding model on {self.device}")
