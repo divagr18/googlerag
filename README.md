@@ -39,14 +39,13 @@ pip install -r requirements.txt
 ```bash
 uvicorn api.main:app --reload
 ```
-By default runs at: **http://127.0.0.1:8000**
 
 ---
 
 ## **API Usage**
 **Endpoint:**  
 ```
-POST /hackrx/run
+POST api/v1/hackrx/run
 ```
 
 **Headers:**
@@ -58,7 +57,7 @@ Content-Type: application/json
 **Request JSON format:**
 ```json
 {
-  "doc": "https://example.com/document.pdf",
+  "documents": "https://example.com/document.pdf",
   "questions": [
     "What is the policy for sick leave?",
     "Who are the signatories of the contract?"
@@ -70,17 +69,8 @@ Content-Type: application/json
 ```json
 {
   "answers": [
-    {
-      "question": "What is the policy for sick leave?",
-      "answer": "Employees are entitled to 12 paid sick leave days per year.",
-      "sources": [
-        {
-          "page": 3,
-          "text": "Employees are entitled to 12 paid sick leave days..."
-        }
-      ]
-    }
-  ]
+      "Employees are entitled to 12 paid sick leave days per year."
+   ]
 }
 ```
 
@@ -91,7 +81,6 @@ Create a `.env` file in the project root:
 ```
 GOOGLE_API_KEY=your_google_gemini_key
 OPENAI_API_KEY=your_openai_key
-BEARER_TOKEN=your_api_token
 ```
 
 ---
@@ -127,8 +116,8 @@ requirements.txt
    ```bash
    uvicorn api.main:app --reload
    ```
-2. **Send POST request** to `/hackrx/run` with `doc` and `questions`.
-3. **Receive answers** with evidence and page numbers.
+2. **Send POST request** to `api/v1/hackrx/run` with `documents` and `questions`.
+3. **Receive answers**.
 
 ---
 
