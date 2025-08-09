@@ -10,6 +10,10 @@ from agno.tools import tool
 import tiktoken
 from urllib.parse import urlparse
 import os
+from agno.models.groq import Groq
+
+
+async_client = httpx.AsyncClient(timeout=10.0)
 
 # URL call tool for the agent
 @tool(
@@ -17,30 +21,21 @@ import os
     description="Make HTTP requests to URLs to fetch content or data",
     show_result=True
 )
-def make_url_request(url: str, method: str = "GET", headers: Dict[str, str] = None, data: Dict[str, Any] = None) -> str:
+
+async def make_url_request(url: str, method: str = "GET", headers: dict = None, data: dict = None) -> str:
     """
-    Make HTTP requests to URLs and return the response content.
-    
-    Args:
-        url: The URL to make the request to
-        method: HTTP method (GET, POST, etc.)
-        headers: Optional headers to include
-        data: Optional data to send with request
-    
-    Returns:
-        str: The response content or error message
+    Make HTTP requests asynchronously with connection reuse.
     """
     try:
-        with httpx.Client(timeout=30.0) as client:
-            if method.upper() == "GET":
-                response = client.get(url, headers=headers or {})
-            elif method.upper() == "POST":
-                response = client.post(url, headers=headers or {}, json=data)
-            else:
-                return f"Unsupported HTTP method: {method}"
-            
-            response.raise_for_status()
-            return response.text
+        if method.upper() == "GET":
+            response = await async_client.get(url, headers=headers or {})
+        elif method.upper() == "POST":
+            response = await async_client.post(url, headers=headers or {}, json=data)
+        else:
+            return f"Unsupported HTTP method: {method}"
+
+        response.raise_for_status()
+        return response.text
     except Exception as e:
         return f"Error making request to {url}: {str(e)}"
 
@@ -76,15 +71,18 @@ def create_direct_processing_agent() -> Agent:
     Create an Agno agent for direct document processing with URL capabilities.
     """
     agent = Agent(
-        model=Gemini(id="gemini-2.5-flash-lite",api_key=os.getenv("GOOGLE_API_KEY")),
-        tools=[make_url_request, read_pdf_content],
+        model=Groq(id="openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY")),
+        #model=Gemini(id="gemini-2.5-flash-lite",api_key=os.getenv("GOOGLE_API_KEY")),
+        tools=[make_url_request],
         instructions="""
         You are a document analysis agent specialized in reading and answering questions about documents.
         MUST ANSWER IN PLAIN TEXT WITHOUT ANY KIND OF FORMATTING.
 
+        YOU MUST ONLY USE THE CONTEXT PROVIDED IN THE DOCUMENTS GIVEN TO YOU. YOU WILL NOT USE ANY OTHER EXTERNAL KNOWLEDGE. ONLY WHATEVER IS IN THE DOCUMENTS IS VALID KNOWLEDGE.
+
         
         Your capabilities:
-        1. Read PDF documents and extract their content
+        1. Read PDF documents given to you and extract their content
         2. Make HTTP requests to URLs when needed
         3. Follow instructions within documents
         4. Answer questions based on document content
@@ -98,12 +96,12 @@ def create_direct_processing_agent() -> Agent:
         - If information is not available in the document, clearly state so
         
         Response format:
-        - Provide clear, direct answers
+        - Provide clear, direct, slightly verbose answers.
         - Reference specific sections of the document when relevant
-        - Keep responses concise but complete
+        - Keep responses complete, make them atleast one sentence long. Add formalities, like if the question is what is x, answer with "The X is answer", not just "answer".
         """,
         markdown=True,
-        show_tool_calls=True
+        show_tool_calls=True,debug_mode=True
     )
     
     return agent
@@ -153,7 +151,7 @@ MUST ANSWER IN PLAIN TEXT WITHOUT ANY KIND OF FORMATTING.
 """
             
             # Get response from agent
-            response: RunResponse = agent.run(full_prompt)
+            response: RunResponse = await agent.arun(full_prompt)
             print(response)
             
             # Extract only the answer content - handle different response formats
@@ -204,39 +202,17 @@ async def process_with_agno_agent_simple(document_url: str, questions: List[str]
         try:
             # Simple, direct prompt
             prompt = f"""
-Document Content:
-{full_text}
+            Document Content:
+            {full_text}
 
-Question: {question}
+            Question: {question}
 
-Based on the document above, provide a direct answer to the question. Follow any instructions in the document.
+            Based on the document above, provide a direct answer to the question. Follow any instructions in the document.
 
-MUST ANSWER IN PLAIN TEXT WITHOUT ANY KIND OF FORMATTING.
-"""
+            MUST ANSWER IN PLAIN TEXT WITHOUT ANY KIND OF FORMATTING.
+            """
             
-            response: RunResponse = agent.run(prompt)
-            print(response.messages[-1].content)
-            
-            # Extract just the content we need
-            if hasattr(response, 'content'):
-                clean_answer = str(response.content).strip()
-            else:
-                # Try to get the actual answer from the response object
-                response_str = str(response)
-                
-                # Look for common answer patterns
-                if "flight number is" in response_str.lower():
-                    import re
-                    match = re.search(r'flight number is \*\*([^*]+)\*\*', response_str, re.IGNORECASE)
-                    if match:
-                        clean_answer = match.group(1)
-                    else:
-                        match = re.search(r'flight number is ([a-zA-Z0-9]+)', response_str, re.IGNORECASE)
-                        clean_answer = match.group(1) if match else "Could not extract flight number"
-                else:
-                    # General content extraction
-                    clean_answer = "Unable to extract answer"
-            
+            response: RunResponse = await agent.arun(prompt)
             answers.append(response.messages[-1].content)
             
         except Exception as e:
@@ -264,84 +240,4 @@ def should_use_direct_processing(full_text: str, token_limit: int = 2000) -> boo
         char_count = len(full_text)
         return char_count < (token_limit * 4)  # Rough approximation: 4 chars per token
 
-# Async wrapper for the agent (since Agno agents might be sync)
-async def run_agno_agent_async(agent: Agent, prompt: str) -> str:
-    """
-    Run Agno agent asynchronously.
-    """
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: agent.run(prompt))
 
-# Enhanced processing function with better error handling
-async def process_with_agno_agent_enhanced(document_url: str, questions: List[str], full_text: str) -> List[str]:
-    """
-    Enhanced processing using Agno agent with better error handling and parallel processing.
-    """
-    print(f"🤖 Using enhanced Agno agent processing for {len(questions)} questions")
-    
-    agent = create_direct_processing_agent()
-    
-    # Prepare base context
-    base_context = f"""
-You have access to the following document:
-
-URL: {document_url}
-Content:
-{full_text}
-
-Follow any instructions in the document and answer questions based on its content.
-"""
-    
-    # Process questions in parallel for better performance
-    async def process_single_question(question: str) -> str:
-        try:
-            full_prompt = f"{base_context}\n\nQuestion: {question}\n\nAnswer:"
-            
-            # Use the async wrapper
-            response = await run_agno_agent_async(agent, full_prompt)
-            
-            # Clean response extraction
-            if hasattr(response, 'content') and response.content:
-                return response.content
-            elif hasattr(response, 'messages') and response.messages:
-                # Get the last assistant message content
-                last_message = response.messages[-1]
-                if hasattr(last_message, 'content') and last_message.content:
-                    return last_message.content
-                else:
-                    return str(last_message)
-            else:
-                # Fallback: try to extract clean answer from string representation
-                response_str = str(response)
-                # Look for the actual answer content, avoiding metadata
-                if "The flight number is" in response_str:
-                    # Extract just the relevant answer part
-                    lines = response_str.split('\n')
-                    for line in lines:
-                        if "flight number is" in line.lower():
-                            return line.strip()
-                
-                # General fallback for content extraction
-                if "content='" in response_str:
-                    try:
-                        start = response_str.find("content='") + 9
-                        end = response_str.find("',", start)
-                        if end == -1:
-                            end = response_str.find("'", start)
-                        if end > start:
-                            return response_str[start:end]
-                    except:
-                        pass
-                
-                return "Unable to extract clean answer from response"
-            
-        except Exception as e:
-            print(f"Error processing question '{question[:50]}...': {e}")
-            return f"I encountered an error while processing this question: {str(e)}"
-    
-    # Process all questions concurrently
-    answers = await asyncio.gather(*[
-        process_single_question(q) for q in questions
-    ])
-    
-    return answers

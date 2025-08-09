@@ -26,12 +26,6 @@ from nltk.tokenize import sent_tokenize
 import nltk
 
 
-# --- DEV MODE MODIFICATION START ---
-# Define the URL prefix and the local path for the specific file.
-PRINCIPIA_URL_PREFIX = "https://hackrx.blob.core.windows.net/assets/principia_newton.pdf"
-# Using a raw string (r"...") is important for Windows paths with backslashes.
-LOCAL_PRINCIPIA_PATH = r"C:\Users\Keshav\Downloads\principia_newton (2).pdf"
-# --- DEV MODE MODIFICATION END ---
 
 def smart_word_doc_chunking(text: str, page_num: int, max_chunk_size: int = 1500, overlap_size: int = 150) -> List[Tuple[str, int]]:
     """
@@ -158,23 +152,6 @@ async def stream_document(url: str) -> AsyncIterator[bytes]:
     Streams a document. If it's the Principia URL, it uses a local file with a
     simulated delay. Otherwise, it downloads to a temporary location using aria2c.
     """
-    # --- DEV MODE MODIFICATION START ---
-    if url.startswith(PRINCIPIA_URL_PREFIX):
-        if os.path.exists(LOCAL_PRINCIPIA_PATH):
-            print(f"DEV_MODE: Matched Principia URL. Using local file: {LOCAL_PRINCIPIA_PATH}")
-            print("DEV_MODE: Simulating a 1-second delay...")
-            print("DEV_MODE: Simulation complete. Streaming local file content.")
-            
-            with open(LOCAL_PRINCIPIA_PATH, "rb") as f:
-                content = f.read()
-            
-            chunk_size = 8192
-            for i in range(0, len(content), chunk_size):
-                yield content[i:i+chunk_size]
-            return # Exit the function after streaming the local file
-        else:
-            print(f"DEV_MODE WARNING: Local file not found at '{LOCAL_PRINCIPIA_PATH}'. Falling back to web download.")
-    # --- DEV MODE MODIFICATION END ---
 
     # Fallback to original logic if the URL is not the special one OR the local file doesn't exist.
     temp_dir = tempfile.mkdtemp()
