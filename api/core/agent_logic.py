@@ -274,6 +274,7 @@ async def synthesize_direct_answer(original_question: str, context: str, use_hig
     If the question is unethical or illegal, first state that the document does not contain information about it, then briefly explain possible consequences.
     If the question is hypothetical and cannot be answered from the document, you may attempt an answer once only if you are sure. If still uncertain, respond exactly: I could not find relevant information in the document.
     MUST ALWAYS respond in English, concisely, in 2–3 sentences maximum.
+    IF something that is asked for is not EXACTLY in the documents, must point that out before you answer. Like : "While it's not directly mentioned in the document...."
 
 **Instructions for Your Response:**
 1. Analyze the evidence carefully and identify only the parts that directly answer the user's question.
