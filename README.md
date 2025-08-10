@@ -2,7 +2,7 @@
 
 An advanced document processing and question-answering system that combines multiple retrieval strategies with state-of-the-art Language Models to extract precise answers from complex documents.
 
-This is a readme that focuses on giving an overview of the project. For a more comprehensive look into how the system works, refer to [Explanation.md](./Explanation.md).
+This is a readme that focuses on giving an overview of the project. For a more comprehensive look into how the system works, refer to [Explanation.md](./Explanation.md). To just start the app, run ```docker compose build``` and ```docker compose up --build -d```
 
 ## Table of Contents
 
