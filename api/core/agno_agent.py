@@ -66,7 +66,7 @@ def create_direct_processing_agent() -> Agent:
     Create an Agno agent for direct document processing with URL capabilities.
     """
     agent = Agent(
-        model=Groq(id="openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY")),
+        model=Groq(id="openai/gpt-oss-20b", api_key=os.getenv("GROQ_API_KEY")),
         #model=Gemini(id="gemini-2.5-flash-lite",api_key=os.getenv("GOOGLE_API_KEY")),
         tools=[make_url_request],
         instructions="""

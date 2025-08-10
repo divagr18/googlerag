@@ -158,12 +158,9 @@ async def run_submission(request: RunRequest = Body(...)):
 
         if is_image_url(request.documents):
             print("🖼️ Image URL detected. Using direct vision query.")
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(request.documents, timeout=60.0)
-                resp.raise_for_status()
-                img_bytes = resp.content
+            # No need to download the image, pass URL directly
             answers = await asyncio.gather(*[
-                answer_image_query(img_bytes, q) for q in request.questions
+                answer_image_query(request.documents, q) for q in request.questions
             ])
             print(f"⏱️ Total time (image): {time.perf_counter() - start:.2f}s")
             for question, answer in zip(request.questions, answers):
@@ -171,6 +168,7 @@ async def run_submission(request: RunRequest = Body(...)):
                     qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
                 except Exception as e:
                     print(f"⚠️ Error logging QA pair: {e}")
+            return RunResponse(answers=answers)
 
         # Document processing starts here
         doc_iter = stream_document(request.documents)

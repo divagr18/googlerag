@@ -11,6 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install system dependencies, including Python 3.11 and its tools.
 RUN apt-get update && apt-get install -y \
     python3.11 \
+    python3-distutils \
     python3.11-venv \
     python3-pip \
     tesseract-ocr \
