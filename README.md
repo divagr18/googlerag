@@ -273,7 +273,7 @@ KB Index Building ──┘                    └──── Strategy Cache
 
 **Concurrent Query Analysis**: Simultaneously, each user question is sent to GPT-4.1-nano for decomposition analysis. The system asks: "What individual pieces of information are needed to answer this question?" Complex questions like "I renewed my policy yesterday and have been a customer for 6 years. Can I raise a claim for Hydrocele?" get broken down into factual sub-questions about waiting periods and continuous coverage benefits.
 
-This concurrent approach typically saves 3-5 seconds compared to sequential processing, which is crucial for user experience.
+This concurrent approach typically saves 3-5 seconds compared to sequential processing, which is crucial for user experience. This has a HARD CAP of 6s to ensure any API call doesn't get stuck and cause an increase in latency.  
 
 ### 3. 🏗️ **Knowledge Base Construction**
 
