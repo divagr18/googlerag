@@ -16,13 +16,13 @@
 .idea
 .vscode
 
+scripts/
+
 # Ignore .env files
 .env
 .envrc
 
 # ignore storage dir
-/storage
-
 # ignore dist dir
 dist
 

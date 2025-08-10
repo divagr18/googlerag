@@ -14,11 +14,15 @@ cpu_executor = ThreadPoolExecutor()
 # Semaphore to cap concurrent searches
 search_sem = asyncio.Semaphore(40)
 
+
 def _tokenize_doc(doc: str) -> List[str]:
     return re.findall(r"\b[a-zA-Z]{3,}\b", doc.lower())
 
+
 class RequestKnowledgeBase:
-    def __init__(self, embedding_manager: OptimizedEmbeddingManager, use_gpu: bool = True):
+    def __init__(
+        self, embedding_manager: OptimizedEmbeddingManager, use_gpu: bool = True
+    ):
         self.manager = embedding_manager
         self.chunks: List[Dict] = []
         self.faiss_index = None
@@ -29,7 +33,9 @@ class RequestKnowledgeBase:
 
     async def _build_bm25_parallel(self, chunks: List[Dict]):
         loop = asyncio.get_event_loop()
-        tasks = [loop.run_in_executor(cpu_executor, _tokenize_doc, c['text']) for c in chunks]
+        tasks = [
+            loop.run_in_executor(cpu_executor, _tokenize_doc, c["text"]) for c in chunks
+        ]
         tokenized = await asyncio.gather(*tasks)
         non_empty_docs = [doc for doc in tokenized if len(doc) > 0]
         if non_empty_docs:
@@ -61,10 +67,12 @@ class RequestKnowledgeBase:
         self.chunks = chunks
         await asyncio.gather(
             self._build_bm25_parallel(chunks),
-            self._build_faiss_async(precomputed_embeddings)
+            self._build_faiss_async(precomputed_embeddings),
         )
 
-    async def search(self, query: str, k: int = 5, fusion_weights: Tuple[float, float] = (0.4, 0.6)) -> List[Tuple[Dict, float]]:
+    async def search(
+        self, query: str, k: int = 5, fusion_weights: Tuple[float, float] = (0.4, 0.6)
+    ) -> List[Tuple[Dict, float]]:
         if not self.chunks or not self.faiss_index or not self.bm25_index:
             return []
 
@@ -91,7 +99,11 @@ class RequestKnowledgeBase:
 
             faiss_k = min(effective_k * 2, len(self.chunks))
             D, I = self.faiss_index.search(q_emb, faiss_k)
-            faiss_res = {int(idx): float(score) for idx, score in zip(I[0], D[0]) if idx != -1 and score > 0}
+            faiss_res = {
+                int(idx): float(score)
+                for idx, score in zip(I[0], D[0])
+                if idx != -1 and score > 0
+            }
 
             max_b = max(bm25_res.values()) if bm25_res else 1
             max_f = max(faiss_res.values()) if faiss_res else 1
@@ -102,7 +114,9 @@ class RequestKnowledgeBase:
                 combined[idx] = fusion_weights[0] * b + fusion_weights[1] * f
 
             sorted_idx = sorted(combined.items(), key=lambda x: -x[1])
-            results = [(self.chunks[i], combined[i]) for i, _ in sorted_idx[:effective_k]]
+            results = [
+                (self.chunks[i], combined[i]) for i, _ in sorted_idx[:effective_k]
+            ]
 
             if len(self.cache) > 128:
                 self.cache.pop(next(iter(self.cache)))

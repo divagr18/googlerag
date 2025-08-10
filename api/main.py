@@ -1,5 +1,6 @@
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -12,6 +13,7 @@ from api.state import ml_models  # <-- Import from the neutral state file
 from .core.embedding_manager import OptimizedEmbeddingManager
 
 # A simple dictionary to hold the loaded model manager
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,7 +42,7 @@ def create_app() -> FastAPI:
         docs_url="/docs" if api_settings.docs_enabled else None,
         redoc_url="/redoc" if api_settings.docs_enabled else None,
         openapi_url="/openapi.json" if api_settings.docs_enabled else None,
-        lifespan=lifespan  # <-- Use the new lifespan manager
+        lifespan=lifespan,  # <-- Use the new lifespan manager
     )
 
     app.include_router(v1_router, prefix="/api")

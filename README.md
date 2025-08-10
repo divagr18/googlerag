@@ -271,7 +271,9 @@ GOOGLE_API_KEY=your_google_gemini_api_key
 OPENAI_API_KEY=your_openai_api_key
 GROQ_API_KEY=your_groq_api_key
 ```
+### Optional : Lint and Format
 
+Feel free to run the ruff scripts in scripts/ to lint and format the code if you want to keep things clean and consistent. We've set up some basic ruff based linting and formatting scripts to catch common issues and standardize formatting.
 
 ##  Usage
 

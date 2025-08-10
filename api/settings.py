@@ -25,5 +25,6 @@ class ApiSettings(BaseSettings):
         valid_cors.append("http://localhost")
         return valid_cors
 
+
 # Create ApiSettings object
 api_settings = ApiSettings()

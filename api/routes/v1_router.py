@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from api.routes.health import health_router
+
 # Corrected: Standardized to absolute import
 from api.routes.hackrx import hackrx_router
 
