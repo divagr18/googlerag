@@ -634,20 +634,28 @@ Content-Type: application/json
 
 ## 📈 Future Roadmap
 
-### Immediate Enhancements
-- [ ] Persistent vector database integration
-- [ ] Web UI for document upload and querying
-- [ ] Multi-tenant authentication system
-- [ ] Real-time processing status updates
+This roadmap outlines potential directions for evolving the system from a powerful query engine into a comprehensive document intelligence platform.
 
-### Advanced Features
-- [ ] Conversational follow-up questions
-- [ ] Document summarization and key insights
-- [ ] Multi-document cross-referencing
-- [ ] Custom domain model fine-tuning
+### Core Pipeline & Performance Enhancements
+-   **Graph RAG (Knowledge Graph Retrieval)**: Extract entities and relationships from documents to build a knowledge graph. This would enable answering complex, multi-hop questions like "Which signatories approved contracts with clauses that were later disputed?"
+-   **Advanced Table & Chart Understanding**: Implement a dedicated pipeline to parse tables and charts into structured data (e.g., pandas DataFrames). Allow natural language queries directly against this structured data for precise numerical and relational answers.
+-   **Hierarchical & Recursive Chunking**: For very long, structured documents (like books or legal codes), implement a strategy that chunks chapters, sections, and paragraphs hierarchically. This allows the system to summarize context at different levels of granularity.
+-   **Adaptive Retrieval Strategy**: Develop a meta-agent that learns to select the best retrieval strategy (e.g., BM25-dominant, FAISS-dominant, or specific fusion weights) based on the type of query, improving efficiency and relevance.
 
-### Integration Possibilites
-- [ ] Microsoft Teams/Slack bots
-- [ ] REST API SDK generation
-- [ ] Webhook notifications
-- [ ] Export to various formats
+### User Experience & Interface
+-   **Interactive Document Viewer**: A web UI that displays the source document alongside the chat interface. When an answer is provided, the source chunks should be automatically highlighted in the document viewer for seamless verification.
+-   **User Feedback Loop (RLHF)**: Add thumbs-up/thumbs-down buttons to answers. This feedback would be collected to create a dataset for fine-tuning models using Reinforcement Learning from Human Feedback, continuously improving accuracy.
+-   **Automated Query Suggestions**: Upon document ingestion, analyze the content and proactively suggest relevant, insightful questions to the user, guiding them toward the document's key information.
+-   **Answer Curation & Management**: Allow expert users or administrators to review, edit, and save "golden" answers to common questions, creating a trusted knowledge base that complements the AI-generated responses.
+
+### Enterprise & Production Features
+-   **Automated Document Ingestion**: Create data connectors to automatically sync and index documents from sources like **SharePoint, Google Drive, Confluence, and S3 buckets**, keeping the knowledge base up-to-date without manual uploads.
+-   **Granular Access Control (ACLs)**: Implement a robust permission system where access can be controlled per document, per collection, or per user group, ensuring data security and confidentiality in a multi-tenant environment.
+-   **Comprehensive Analytics Dashboard**: Move beyond logs to a visual dashboard showing query trends, most-queried documents, unanswered questions, latency metrics, and cost-per-query breakdowns for operational insights.
+-   **Data Residency & Compliance Controls**: For regulations like GDPR, add features to control the geographical location of data processing and storage, ensuring compliance with international data laws.
+
+### Advanced AI Capabilities
+-   **Agentic Workflows & Task Execution**: Evolve from a Q&A system to a task-execution engine. Allow multi-step prompts like, "Summarize the key risks in this contract, compare them against our standard compliance checklist, and draft an email to the legal team highlighting any deviations."
+-   **Proactive Insights & Anomaly Detection**: Create a monitoring agent that periodically scans new documents and proactively alerts users to significant changes, risks, or opportunities—for example, "A new termination clause was added to the employee handbook that differs from the previous version."
+-   **Multi-Document Comparative Analysis**: Enable queries that span multiple documents, such as "Compare the liability clauses in Contract A and Contract B and highlight the key differences."
+-   **Voice-to-Query & Spoken Answers**: Integrate Speech-to-Text (STT) and Text-to-Speech (TTS) services to allow users to ask questions verbally and receive spoken responses, enabling hands-free interaction.
