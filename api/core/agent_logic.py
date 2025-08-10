@@ -87,11 +87,6 @@ async def answer_image_query(image_url: str, question: str) -> str:
                 "Write everything as normal text without quotes."
             )
             
-            # For GPT-4.1 mini with vision, you need to send a message including the image_url in the content
-            # But OpenAI's official vision models use a special "image_url" message type; 
-            # if that's not available, you can embed the image URL as plain text in the prompt.
-
-            # Here is an example if image input is supported as a message type (pseudo code):
             messages = [
                 {
                     "role": "user",
@@ -312,7 +307,6 @@ async def synthesize_direct_answer(original_question: str, context: str, use_hig
     If the question is unrelated to the provided document, respond that the document does not contain any information about it.
     If the question is unethical or illegal, first state that the document does not contain information about it, then briefly explain possible consequences.
     MUST ALWAYS respond in English, concisely, in 2–3 sentences maximum.
-    IF something that is asked for is not EXACTLY in the documents, must point that out before you answer. Like if the question is x, and its not given in the doc, say something like "The document mentions y but does not explicitly discuss x."
 
 **Instructions for Your Response:**
 1. Analyze the evidence carefully and identify only the parts that directly answer the user's question.
