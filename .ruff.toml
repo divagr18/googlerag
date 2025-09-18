@@ -1,0 +1,6 @@
+line-length = 88
+target-version = "py311"
+exclude = ["__pycache__", ".venv", "venv", ".git", "build", "dist", "qa_log.log"]
+
+[lint]
+extend-ignore = ["E203"]
