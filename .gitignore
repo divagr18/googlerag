@@ -30,7 +30,7 @@ dist
 .venv*
 venv*
 milvus/volumes/milvus/etcd/member/snap/db
-
+frontend\.next
 # Scripts
 serve.py
 script.py
