@@ -1,37 +1,53 @@
-# See https://help.github.com/ignore-files/ for more about ignoring files.
-
+# macOS
 .DS_Store
 
-# Cache
+# Python caches
 .mypy_cache
 *__pycache__*
-*.egg-info
 *.pyc
 *.pytest_cache
 *.ruff_cache
 *.cache*
 *.config*
 
-# Machine specific
+# Python packaging
+*.egg-info
+
+# IDE / Editor
 .idea
 .vscode
-milvus
-db
-# Ignore .env files
+
+# Logs and env
+*.log
 .env
-.log
 .envrc
 
-# ignore storage dir
+# Storage and build
 /storage
-
-# ignore dist dir
 dist
 
-# ignore virtualenvs
+# Virtual environments
 .venv*
 venv*
 milvus/volumes/milvus/etcd/member/snap/db
-qa_log.log
+
+# Scripts
 serve.py
 script.py
+qa_log.log
+frontend/node_modules
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+.pnpm-store/
+.eslintcache
+**/node_modules/
+
+# System files
+Thumbs.db
+ehthumbs.db

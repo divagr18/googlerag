@@ -470,6 +470,7 @@ def smart_paragraph_split(
 async def optimized_semantic_chunk_text(
     pages_data: List[Tuple[str, int]],
     embedding_manager: OptimizedEmbeddingManager,
+    document_url: str = "",
     similarity_threshold: float = 0.3,
     max_chunk_size: int = 1500,
 ) -> Tuple[List[Dict], np.ndarray]:
@@ -503,7 +504,14 @@ async def optimized_semantic_chunk_text(
     chunk_embs = []
 
     for i, (text, page_num) in enumerate(all_paragraphs):
-        chunks.append({"text": text, "metadata": {"page": page_num}})
+        chunks.append({
+            "text": text, 
+            "metadata": {
+                "page": page_num,
+                "document_url": document_url,
+                "chunk_index": i
+            }
+        })
         chunk_embs.append(para_embs[i])
 
     print(

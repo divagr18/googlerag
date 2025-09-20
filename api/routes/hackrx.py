@@ -1,15 +1,17 @@
 import os
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, UploadFile, File
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional, Tuple
 import time
 import logging
 from urllib.parse import urlparse
 import httpx
 from langdetect import detect
+import tempfile
+import shutil
+import numpy as np
 
 # --- Logger Configuration ---
 qa_logger = logging.getLogger("qa_logger")
@@ -27,8 +29,12 @@ from api.core.document_processor import (
     stream_document,
     process_document_stream,
     optimized_semantic_chunk_text,
+    _extract_text_from_pdf_stream,
+    _extract_text_from_docx_stream,
 )
 from api.core.vector_store import RequestKnowledgeBase
+from api.core.chroma_manager import ChromaDocumentManager
+from api.core.citation_utils import CitationManager
 from api.core.agent_logic import (
     answer_raw_text_query,
     prepare_query_strategies_for_all_questions,
@@ -61,20 +67,72 @@ class RunResponse(BaseModel):
     answers: List[str]
 
 
-# --- Authentication ---
-auth_scheme = HTTPBearer()
-EXPECTED_TOKEN = "7bf4409966a1479a8578f3258eba4e215cef0f7ccd694a2440149c1eeb4874ef"
+class UploadRequest(BaseModel):
+    document_url: str = Field(
+        ..., description="URL of the document to upload and store in the vector database."
+    )
 
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(auth_scheme)):
-    if (
-        not credentials
-        or credentials.scheme != "Bearer"
-        or credentials.credentials != EXPECTED_TOKEN
-    ):
-        raise HTTPException(
-            status_code=401, detail="Invalid or missing authentication token"
-        )
+class UploadResponse(BaseModel):
+    message: str
+    document_id: str
+    processing_time: float
+    total_chunks: int
+
+
+class AskRequest(BaseModel):
+    questions: List[str] = Field(
+        ..., description="A list of questions to answer using the stored documents."
+    )
+    document_ids: List[str] = Field(
+        default=None, description="Optional list of specific document IDs to search within."
+    )
+
+
+class AskResponse(BaseModel):
+    answers: List[str]
+
+
+async def process_local_file(file_path: str) -> List[Tuple[str, int]]:
+    """
+    Process a local file directly without downloading.
+    Returns a list of (text, page_number) tuples.
+    """
+    import io
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    
+    # Create a thread pool executor for CPU-bound tasks
+    cpu_executor = ThreadPoolExecutor(max_workers=2)
+    
+    file_ext = os.path.splitext(file_path)[1].lower()
+    
+    try:
+        if file_ext == ".pdf":
+            # Process PDF
+            with open(file_path, 'rb') as f:
+                pdf_stream = io.BytesIO(f.read())
+            return await _extract_text_from_pdf_stream(pdf_stream)
+            
+        elif file_ext == ".docx":
+            # Process DOCX
+            with open(file_path, 'rb') as f:
+                docx_stream = io.BytesIO(f.read())
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(cpu_executor, _extract_text_from_docx_stream, docx_stream)
+            
+        elif file_ext in [".txt", ".md"]:
+            # Process text files
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return [(content, 1)]  # Single page for text files
+            
+        else:
+            raise ValueError(f"Unsupported file type: {file_ext}")
+            
+    except Exception as e:
+        print(f"Error processing local file {file_path}: {e}")
+        raise
 
 
 def is_image_url(url: str) -> bool:
@@ -89,6 +147,13 @@ class UnsupportedFileType(Exception):
 
 
 def validate_file_type(url: str) -> None:
+    # Check if it's a local file path instead of URL
+    if os.path.isabs(url) or url.startswith('C:') or url.startswith('/'):
+        raise UnsupportedFileType(
+            "Local file paths are not supported in /upload endpoint. "
+            "Use /upload-file endpoint to upload local files."
+        )
+    
     path = urlparse(url).path
     file_ext = os.path.splitext(path)[1].lower() or ".txt"
     supported_formats = [
@@ -152,6 +217,28 @@ async def process_document_and_build_kb(
     pipeline_start_time = time.perf_counter()
     print(f"PIPE-DOC: Starting document pipeline for: {document_url}")
 
+    # Initialize ChromaDB manager
+    chroma_manager = ChromaDocumentManager()
+    
+    # Check if document already exists in persistent storage
+    if chroma_manager.document_exists(document_url):
+        print(f"📋 Document found in persistent storage: {document_url[:50]}...")
+        
+        # Create knowledge base from existing embeddings
+        knowledge_base = RequestKnowledgeBase(manager)
+        
+        # For now, we'll still need to rebuild the FAISS index from ChromaDB
+        # In a future optimization, we could cache the FAISS index as well
+        print(f"⚡ Using cached embeddings, rebuilding search index...")
+        
+        # Get document info
+        doc_info = chroma_manager.get_document_info(document_url)
+        if doc_info:
+            print(f"📖 Document: {doc_info['document_title']} ({doc_info['total_chunks']} chunks)")
+        
+        # TODO: Load chunks from ChromaDB and rebuild FAISS index
+        # For now, continue with normal processing but will store in ChromaDB
+        
     t0 = time.perf_counter()
     doc_iterator = stream_document(document_url)
     pages_data = await process_document_stream(document_url, doc_iterator)
@@ -160,7 +247,7 @@ async def process_document_and_build_kb(
 
     t2 = time.perf_counter()
     chunks, precomputed_embeddings = await optimized_semantic_chunk_text(
-        pages_data, manager
+        pages_data, manager, document_url=document_url
     )
     t3 = time.perf_counter()
     print(f"PIPE-DOC: ⏱️ Semantic chunking (incl. embedding) took: {t3 - t2:.2f}s")
@@ -170,6 +257,16 @@ async def process_document_and_build_kb(
 
     if chunks:
         await knowledge_base.build(chunks, precomputed_embeddings)
+        
+        # Store in ChromaDB for future use
+        try:
+            document_id = chroma_manager.store_document_chunks(
+                document_url, chunks, precomputed_embeddings
+            )
+            print(f"💾 Stored document in persistent storage: {document_id}")
+        except Exception as e:
+            print(f"⚠️ Failed to store in ChromaDB: {e}")
+            # Continue without ChromaDB storage
     else:
         print("PIPE-DOC: ⚠️ No chunks were generated from the document.")
 
@@ -181,9 +278,283 @@ async def process_document_and_build_kb(
     return knowledge_base
 
 
+# --- /upload Endpoint ---
+@hackrx_router.post("/upload", response_model=UploadResponse)
+async def upload_document(request: UploadRequest = Body(...)):
+    """
+    Upload and process a document into the persistent vector database.
+    This endpoint allows you to pre-process documents and store them for future queries.
+    """
+    try:
+        start_time = time.perf_counter()
+        document_url = request.document_url
+        
+        print(f"📤 Starting document upload: {document_url}")
+        
+        # Validate file type
+        validate_file_type(document_url)
+        
+        # Initialize components
+        manager = ml_models.get("embedding_manager")
+        if not manager:
+            raise HTTPException(status_code=503, detail="Embedding manager not ready")
+        chroma_manager = ChromaDocumentManager()
+        
+        # Check if document already exists
+        if chroma_manager.document_exists(document_url):
+            raise HTTPException(
+                status_code=409, 
+                detail=f"Document already exists in database. Use /documents/reprocess to update it."
+            )
+        
+        # Process document
+        print(f"🔄 Processing document: {document_url}")
+        doc_iterator = stream_document(document_url)
+        pages_data = await process_document_stream(document_url, doc_iterator)
+        chunks, precomputed_embeddings = await optimized_semantic_chunk_text(
+            pages_data, manager, document_url=document_url
+        )
+        
+        if not chunks:
+            raise HTTPException(
+                status_code=400, 
+                detail="No chunks could be generated from the document. Please check the document format and content."
+            )
+        
+        # Store in ChromaDB
+        document_id = chroma_manager.store_document_chunks(
+            document_url, chunks, precomputed_embeddings
+        )
+        
+        processing_time = time.perf_counter() - start_time
+        print(f"✅ Document uploaded successfully in {processing_time:.2f}s")
+        
+        return UploadResponse(
+            message="Document uploaded and processed successfully",
+            document_id=document_id,
+            processing_time=processing_time,
+            total_chunks=len(chunks)
+        )
+        
+    except HTTPException:
+        raise
+    except UnsupportedFileType as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"❌ Error uploading document: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
+
+
+# --- /upload-file Endpoint ---
+@hackrx_router.post("/upload-file", response_model=UploadResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    custom_filename: Optional[str] = None
+):
+    """
+    Upload and process a local file into the persistent vector database.
+    Supports PDF, DOCX, TXT, and other common document formats.
+    
+    Args:
+        file: The file to upload
+        custom_filename: Optional custom name for the file (will use original filename if not provided)
+    """
+    try:
+        start_time = time.perf_counter()
+        
+        # Validate file type
+        filename = custom_filename or file.filename
+        if not filename:
+            raise HTTPException(status_code=400, detail="Filename is required")
+        
+        print(f"📤 Starting file upload: {filename}")
+        
+        # Check file extension
+        allowed_extensions = {'.pdf', '.docx', '.txt', '.doc', '.md'}
+        file_ext = os.path.splitext(filename)[1].lower()
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported file type: {file_ext}. Allowed types: {', '.join(allowed_extensions)}"
+            )
+        
+        # Initialize components
+        manager = ml_models.get("embedding_manager")
+        if not manager:
+            raise HTTPException(status_code=503, detail="Embedding manager not ready")
+        chroma_manager = ChromaDocumentManager()
+        
+        # Create a temporary file to save the uploaded content
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+            # Copy uploaded file content to temporary file
+            shutil.copyfileobj(file.file, temp_file)
+            temp_file_path = temp_file.name
+        
+        try:
+            # Use the temporary file path as the document URL
+            document_url = f"file://{temp_file_path}"
+            
+            # Check if document with this filename already exists
+            # We'll use the filename as a unique identifier
+            filename_url = f"uploaded://{filename}"
+            if chroma_manager.document_exists(filename_url):
+                raise HTTPException(
+                    status_code=409, 
+                    detail=f"File '{filename}' already exists in database. Use a different filename or delete the existing file first."
+                )
+            
+            # Process document directly from local file (no downloading needed)
+            print(f"🔄 Processing uploaded file: {filename}")
+            
+            # For local files, we can process them directly without streaming/downloading
+            # Just read the file and pass it to the document processor
+            pages_data = await process_local_file(temp_file_path)
+            chunks, precomputed_embeddings = await optimized_semantic_chunk_text(
+                pages_data, manager, document_url=filename_url  # Use filename_url for storage
+            )
+            
+            if not chunks:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="No chunks could be generated from the file. Please check the file format and content."
+                )
+            
+            # Store in ChromaDB with the filename URL
+            document_id = chroma_manager.store_document_chunks(
+                filename_url, chunks, precomputed_embeddings
+            )
+            
+            processing_time = time.perf_counter() - start_time
+            print(f"✅ File uploaded successfully in {processing_time:.2f}s")
+            
+            return UploadResponse(
+                message=f"File '{filename}' uploaded and processed successfully",
+                document_id=document_id,
+                processing_time=processing_time,
+                total_chunks=len(chunks)
+            )
+            
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass  # File might already be deleted
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error uploading file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+
+
+# --- /ask Endpoint ---
+@hackrx_router.post("/ask", response_model=AskResponse)
+async def ask_questions(request: AskRequest = Body(...)):
+    """
+    Ask questions against documents stored in the persistent vector database.
+    This endpoint uses the pre-processed documents and returns answers with citations.
+    """
+    try:
+        start_time = time.perf_counter()
+        print(f"❓ Processing {len(request.questions)} questions from stored documents")
+        
+        # Initialize components
+        manager = ml_models.get("embedding_manager")
+        if not manager:
+            raise HTTPException(status_code=503, detail="Embedding manager not ready")
+        chroma_manager = ChromaDocumentManager()
+        citation_manager = CitationManager()
+        
+        # Check if we have any documents
+        stats = chroma_manager.get_stats()
+        if stats.get('total_chunks', 0) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="No documents found in database. Please upload documents first using /upload endpoint."
+            )
+        
+        answers = []
+        for question in request.questions:
+            print(f"🔍 Processing question: {question}")
+            
+            # Generate query embedding
+            query_embedding = manager.encode_batch([question])
+            if isinstance(query_embedding, list):
+                query_embedding = np.array(query_embedding[0])
+            else:
+                query_embedding = query_embedding[0]
+            
+            # Search relevant chunks in ChromaDB
+            search_results = chroma_manager.search_documents(
+                query_embedding=query_embedding,
+                n_results=10,
+                document_ids=request.document_ids  # Filter by specific documents if provided
+            )
+            
+            if not search_results:
+                answers.append("I couldn't find relevant information to answer this question in the stored documents.")
+                continue
+            
+            # Extract chunks for processing
+            relevant_chunks = [chunk_dict for chunk_dict, _ in search_results]
+            
+            # Build a temporary knowledge base for this query
+            knowledge_base = RequestKnowledgeBase(manager)
+            
+            # Generate embeddings for chunks with proper numpy conversion
+            chunk_texts = [chunk['text'] for chunk in relevant_chunks]
+            chunk_embeddings_raw = manager.encode_batch(chunk_texts)
+            if isinstance(chunk_embeddings_raw, list):
+                chunk_embeddings = np.array(chunk_embeddings_raw)
+            else:
+                chunk_embeddings = chunk_embeddings_raw
+                
+            await knowledge_base.build(relevant_chunks, chunk_embeddings)
+            
+            # Generate answer using existing logic
+            try:
+                answer_results = await answer_questions_batch_orchestrator(
+                    knowledge_base, 
+                    [{"original_question": question, "sub_questions": [question]}], 
+                    use_high_k=True
+                )
+                
+                # Extract the answer from the results
+                if answer_results and len(answer_results) > 0:
+                    base_answer = answer_results[0][0]  # First tuple, first element (answer)
+                else:
+                    base_answer = "I couldn't generate an answer for this question."
+                
+                # The answer already includes citations from the orchestrator
+                answers.append(base_answer)
+                
+            except Exception as e:
+                print(f"⚠️ Error generating answer: {e}")
+                answers.append("I encountered an error while generating an answer for this question.")
+        
+        processing_time = time.perf_counter() - start_time
+        print(f"✅ Answered {len(request.questions)} questions in {processing_time:.2f}s")
+        
+        # Log Q&A
+        for question, answer in zip(request.questions, answers):
+            try:
+                qa_logger.info(f"{question} | A: {answer.replace(chr(10), ' ')}")
+            except Exception:
+                pass
+        
+        return AskResponse(answers=answers)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error processing questions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process questions: {str(e)}")
+
+
 # --- /run Endpoint with restored RAG logic ---
 @hackrx_router.post(
-    "/run", response_model=RunResponse, dependencies=[Depends(verify_token)]
+    "/run", response_model=RunResponse
 )
 async def run_submission(request: RunRequest = Body(...)):
     try:
@@ -321,3 +692,172 @@ async def run_submission(request: RunRequest = Body(...)):
         raise HTTPException(
             status_code=500, detail=f"An internal server error occurred: {e}"
         )
+
+
+# --- ChromaDB Management Endpoints ---
+
+@hackrx_router.get("/documents")
+async def list_documents():
+    """List all documents stored in ChromaDB."""
+    try:
+        chroma_manager = ChromaDocumentManager()
+        documents = chroma_manager.list_documents()
+        stats = chroma_manager.get_stats()
+        
+        return JSONResponse(content={
+            "documents": documents,
+            "stats": stats
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing documents: {str(e)}")
+
+
+@hackrx_router.get("/documents/{document_id}")
+async def get_document_info(document_id: str):
+    """Get information about a specific document."""
+    try:
+        chroma_manager = ChromaDocumentManager()
+        
+        # Find document by ID in the list
+        documents = chroma_manager.list_documents()
+        document = next((doc for doc in documents if doc["document_id"] == document_id), None)
+        
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+            
+        return JSONResponse(content={"document": document})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting document info: {str(e)}")
+
+
+@hackrx_router.delete("/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a document from ChromaDB."""
+    try:
+        chroma_manager = ChromaDocumentManager()
+        
+        # Find document URL by ID
+        documents = chroma_manager.list_documents()
+        document = next((doc for doc in documents if doc["document_id"] == document_id), None)
+        
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+            
+        success = chroma_manager.delete_document(document["document_url"])
+        
+        if success:
+            return JSONResponse(content={"message": f"Document {document_id} deleted successfully"})
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete document")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
+
+
+@hackrx_router.post("/documents/reprocess")
+async def reprocess_document(document_url: str = Body(..., embed=True)):
+    """Reprocess and update a document in ChromaDB."""
+    try:
+        manager = ml_models.get("embedding_manager")
+        if not manager:
+            raise HTTPException(status_code=503, detail="Embedding manager not ready")
+        chroma_manager = ChromaDocumentManager()
+        
+        # Check if document exists
+        if not chroma_manager.document_exists(document_url):
+            raise HTTPException(status_code=404, detail="Document not found in database")
+        
+        # Process document with force update
+        pipeline_start_time = time.perf_counter()
+        print(f"🔄 Reprocessing document: {document_url}")
+        
+        doc_iterator = stream_document(document_url)
+        pages_data = await process_document_stream(document_url, doc_iterator)
+        chunks, precomputed_embeddings = await optimized_semantic_chunk_text(
+            pages_data, manager, document_url=document_url
+        )
+        
+        if chunks:
+            document_id = chroma_manager.store_document_chunks(
+                document_url, chunks, precomputed_embeddings, force_update=True
+            )
+            
+            processing_time = time.perf_counter() - pipeline_start_time
+            print(f"✅ Document reprocessed in {processing_time:.2f}s")
+            
+            return JSONResponse(content={
+                "message": "Document reprocessed successfully",
+                "document_id": document_id,
+                "processing_time": processing_time,
+                "total_chunks": len(chunks)
+            })
+        else:
+            raise HTTPException(status_code=400, detail="No chunks generated from document")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reprocessing document: {str(e)}")
+
+
+@hackrx_router.get("/stats")
+async def get_database_stats():
+    """Get ChromaDB database statistics."""
+    try:
+        chroma_manager = ChromaDocumentManager()
+        stats = chroma_manager.get_stats()
+        return JSONResponse(content={"stats": stats})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting stats: {str(e)}")
+
+
+@hackrx_router.get("/file/{document_id}")
+async def serve_file(document_id: str):
+    """Serve uploaded files by document ID"""
+    try:
+        chroma_manager = ChromaDocumentManager()
+        
+        # Get document metadata to find the file path
+        documents = chroma_manager.list_documents()
+        target_doc = None
+        for doc in documents:
+            if doc["document_id"] == document_id:
+                target_doc = doc
+                break
+        
+        if not target_doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Extract filename from document_url (e.g., "uploaded://filename.pdf" -> "filename.pdf")
+        if target_doc["document_url"].startswith("uploaded://"):
+            filename = target_doc["document_url"].replace("uploaded://", "")
+            file_path = os.path.join("uploads", filename)
+            
+            if not os.path.exists(file_path):
+                raise HTTPException(status_code=404, detail="File not found on disk")
+            
+            # Determine content type based on file extension
+            if filename.lower().endswith('.pdf'):
+                content_type = "application/pdf"
+            elif filename.lower().endswith('.docx'):
+                content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            elif filename.lower().endswith('.doc'):
+                content_type = "application/msword"
+            else:
+                content_type = "application/octet-stream"
+            
+            from fastapi.responses import FileResponse
+            return FileResponse(
+                path=file_path,
+                media_type=content_type,
+                filename=filename
+            )
+        else:
+            raise HTTPException(status_code=400, detail="File is not an uploaded document")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error serving file: {str(e)}")

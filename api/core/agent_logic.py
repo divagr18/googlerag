@@ -7,6 +7,7 @@ import time
 from typing import List, Dict, Tuple
 from openai import AsyncOpenAI
 from .vector_store import RequestKnowledgeBase
+from .citation_utils import CitationManager
 from dotenv import load_dotenv
 import logging
 from sentence_transformers.cross_encoder import CrossEncoder
@@ -576,7 +577,7 @@ async def answer_questions_batch_orchestrator(
             final_chunks = reranked_chunks[:8]
 
         context_parts = [
-            f"Source: Page {chunk['metadata'].get('page', 'N/A')}\nContent: {chunk['text']}"
+            f"Source: Page {chunk['metadata'].get('page_number', 'N/A')}\nContent: {chunk['text']}"
             for chunk in final_chunks
         ]
         aggregated_context = "\n\n---\n\n".join(context_parts)
@@ -591,7 +592,7 @@ async def answer_questions_batch_orchestrator(
     print(f"🧠 Starting synthesis for {len(synthesis_tasks)} questions...")
     final_answers = await asyncio.gather(*synthesis_tasks)
 
-    # Combine results
+    # Combine results with citations
     results = []
     for i, (answer, reranked_chunks) in enumerate(
         zip(final_answers, all_reranked_chunks)
@@ -599,7 +600,16 @@ async def answer_questions_batch_orchestrator(
         chunk_texts = (
             [chunk["text"] for chunk in reranked_chunks] if reranked_chunks else []
         )
-        results.append((answer, chunk_texts))
+        
+        # Add citations to the answer
+        if reranked_chunks:
+            answer_with_citations = CitationManager.add_citations_to_answer(
+                answer, reranked_chunks, format_type="text", max_citations=3
+            )
+        else:
+            answer_with_citations = answer
+            
+        results.append((answer_with_citations, chunk_texts))
 
     return results
 
@@ -652,7 +662,7 @@ async def answer_question_orchestrator(
     if not use_high_k:
         final_chunks = reranked_chunks[:8]
     context_parts = [
-        f"Source: Page {chunk['metadata'].get('page', 'N/A')}\nContent: {chunk['text']}"
+        f"Source: Page {chunk['metadata'].get('page_number', 'N/A')}\nContent: {chunk['text']}"
         for chunk in final_chunks
     ]
     aggregated_context = "\n\n---\n\n".join(context_parts)
@@ -662,4 +672,12 @@ async def answer_question_orchestrator(
         original_question, aggregated_context, use_high_k=use_high_k
     )
 
-    return final_answer, [chunk["text"] for chunk in final_chunks]
+    # Add citations to the answer
+    if final_chunks:
+        final_answer_with_citations = CitationManager.add_citations_to_answer(
+            final_answer, final_chunks, format_type="text", max_citations=3
+        )
+    else:
+        final_answer_with_citations = final_answer
+
+    return final_answer_with_citations, [chunk["text"] for chunk in final_chunks]

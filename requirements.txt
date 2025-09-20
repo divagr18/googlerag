@@ -1,9 +1,11 @@
-agno
+agno==1.7.9
 aiohttp
+chromadb==0.5.15
 faiss-cpu
 fastapi==0.116.1
 PyMuPDF
 groq==0.31.0
+hashlib
 httpx==0.28.1
 google-genai
 google

@@ -1,0 +1,724 @@
+"use client"
+
+import React from "react"
+
+import { useState, useRef } from "react"
+import { Button } from "./ui/button"
+import { Card } from "./ui/card"
+import { Input } from "./ui/input"
+import { Avatar, AvatarFallback } from "./ui/avatar"
+import { Progress } from "./ui/progress"
+import { ArrowLeft, Upload, Send, FileText } from "lucide-react"
+import type { Document } from "../app/page"
+import { ApiClient } from "../lib/api"
+
+interface ChatInterfaceProps {
+  document: Document
+  documents: Document[]
+  onBack: () => void
+  onSelectDocument: (document: Document, page?: number) => void
+  onFileUpload: (files: FileList) => void
+  onCitationClick?: (document: Document, page?: number) => void
+  isEmbedded?: boolean
+}
+
+interface Message {
+  id: string
+  type: "user" | "ai" | "thinking"
+  content: string
+  isStreaming?: boolean
+  citations?: Citation[]
+}
+
+interface Citation {
+  id: number
+  document_title: string
+  document_id: string
+  page?: number
+}
+
+export function ChatInterface({ document, documents, onBack, onSelectDocument, onFileUpload, onCitationClick, isEmbedded = false }: ChatInterfaceProps) {
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: "1",
+      type: "ai",
+      content: `Hello! I've finished analyzing your document, **${document.document_title}**. Here's a quick summary of my findings. Feel free to ask me anything about it.
+
+**Overall Guardian Score: ${document.guardianScore}/100** (${getScoreText(document.guardianScore || 0)})
+
+**Key Risks Identified:** I've flagged clauses related to the non-refundable security deposit and the automatic lease renewal.
+
+What would you like to explore first?`,
+    },
+  ])
+  const [inputValue, setInputValue] = useState("")
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [isThinking, setIsThinking] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  function getScoreText(score: number) {
+    if (score >= 80) return "Low Risk"
+    if (score >= 60) return "Proceed with Caution"
+    return "High Risk"
+  }
+
+  // Thinking animation component
+  const ThinkingAnimation = () => (
+    <div className="flex items-center space-x-1 text-zinc-500">
+      <span>AI is thinking</span>
+      <div className="flex space-x-1">
+        <div className="w-1 h-1 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+        <div className="w-1 h-1 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+        <div className="w-1 h-1 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+      </div>
+    </div>
+  )
+
+  // Function to stream text character by character
+  const streamText = (text: string, messageId: string, citations?: Citation[]) => {
+    let index = 0
+    const interval = setInterval(() => {
+      if (index <= text.length) {
+        const currentContent = text.slice(0, index)
+        setMessages(prev => prev.map(msg => 
+          msg.id === messageId 
+            ? { 
+                ...msg, 
+                content: currentContent, 
+                isStreaming: index < text.length,
+                citations: citations || []
+              } 
+            : msg
+        ))
+        index++
+      } else {
+        clearInterval(interval)
+        // Final update to ensure citations are properly set
+        setMessages(prev => prev.map(msg => 
+          msg.id === messageId 
+            ? { 
+                ...msg, 
+                content: text, 
+                isStreaming: false,
+                citations: citations || []
+              } 
+            : msg
+        ))
+      }
+    }, 20) // Adjust speed as needed
+  }
+
+  // Function to parse citations from response and convert to numbered format
+  const parseCitationsFromResponse = (content: string): { text: string, citations: Citation[] } => {
+    const citations: Citation[] = []
+    
+    // Extract sources section if it exists
+    const sourcesMatch = content.match(/Sources:\s*([\s\S]*?)$/i)
+    let mainText = content
+    
+    if (sourcesMatch) {
+      const sourcesText = sourcesMatch[1]
+      // Remove the entire sources section from the main text
+      mainText = content.replace(sourcesMatch[0], '').trim()
+      
+      // Parse individual sources - handle both bullet points and numbered citations
+      const sourceLines = sourcesText.split(/\n+/).filter(line => line.trim())
+      let citationCounter = 1
+      
+      sourceLines.forEach(line => {
+        // Match patterns like "• [1] Document Name (PDF, Page X)" 
+        const bulletMatch = line.match(/[•·]\s*\[(\d+)\]\s*(.*?)\s*(?:\((.*?),?\s*Page\s*(\d+)\)|$)/)
+        if (bulletMatch) {
+          const citationNum = parseInt(bulletMatch[1])
+          let docTitle = bulletMatch[2].trim()
+          
+          // Remove file type suffix if present (like "(PDF)")
+          docTitle = docTitle.replace(/\s*\([^)]*\)\s*$/, '').trim()
+          
+          const pageNum = bulletMatch[4] ? parseInt(bulletMatch[4]) : undefined
+          
+          citations.push({
+            id: citationNum,
+            document_title: docTitle,
+            document_id: `doc_${citationNum}`,
+            page: pageNum
+          })
+        }
+      })
+      
+      // Now we need to add citation numbers into the main text where appropriate
+      // Look for logical places to insert citations based on content
+      if (citations.length > 0 && mainText) {
+        // Split into sentences and add citations strategically
+        const sentences = mainText.split(/(?<=[.!?])\s+/)
+        
+        // Add first few citations to early sentences
+        if (sentences.length >= 1 && citations[0]) {
+          sentences[0] = sentences[0] + ` [${citations[0].id}]`
+        }
+        if (sentences.length >= 2 && citations[1]) {
+          sentences[1] = sentences[1] + ` [${citations[1].id}]`
+        }
+        
+        // Add more citations to later sentences if available
+        for (let i = 2; i < Math.min(citations.length, sentences.length); i++) {
+          if (citations[i] && sentences[i]) {
+            sentences[i] = sentences[i] + ` [${citations[i].id}]`
+          }
+        }
+        
+        mainText = sentences.join(' ')
+      }
+      
+      console.log('Original content:', content)
+      console.log('Sources section:', sourcesText)
+      console.log('Main text after sources removed:', mainText)
+      console.log('All parsed citations:', citations)
+      
+      return { text: mainText, citations }
+    }
+    
+    return { text: mainText, citations: [] }
+  }
+
+  // Function to render text with clickable citation numbers
+  const renderTextWithCitations = (text: string, citations: Citation[]) => {
+    if (!citations.length) return text
+    
+    // Split text by citation patterns and render as React elements
+    const parts: (string | React.ReactElement)[] = []
+    let currentText = text
+    let keyCounter = 0
+    
+    // Sort citations by their position in the text to process them in order
+    const sortedCitations = [...citations].sort((a, b) => {
+      const aIndex = currentText.indexOf(`[${a.id}]`)
+      const bIndex = currentText.indexOf(`[${b.id}]`)
+      return aIndex - bIndex
+    })
+    
+    sortedCitations.forEach((citation) => {
+      const citationPattern = `[${citation.id}]`
+      const index = currentText.indexOf(citationPattern)
+      
+      if (index !== -1) {
+        // Add text before citation
+        if (index > 0) {
+          parts.push(currentText.slice(0, index))
+        }
+        
+        // Add clickable citation
+        parts.push(
+          <button
+            key={`citation-${citation.id}-${keyCounter++}`}
+            className="text-blue-400 hover:text-blue-300 underline cursor-pointer ml-0.5 mr-0.5"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              handleCitationClick(citation)
+            }}
+            title={`${citation.document_title}${citation.page ? ` (Page ${citation.page})` : ''}`}
+          >
+            {citationPattern}
+          </button>
+        )
+        
+        // Update currentText to the remaining part
+        currentText = currentText.slice(index + citationPattern.length)
+      }
+    })
+    
+    // Add any remaining text
+    if (currentText.length > 0) {
+      parts.push(currentText)
+    }
+    
+    return parts.length > 0 ? <>{parts}</> : text
+  }
+
+  // Function to render a line with both bold formatting and citations
+  const renderLineWithFormattingAndCitations = (line: string, citations: Citation[]) => {
+    console.log('Rendering line:', line)
+    console.log('With citations:', citations)
+    
+    // If no citations, just handle bold formatting
+    if (!citations.length) {
+      if (line.includes('**')) {
+        return line.split('**').map((part, j) => 
+          j % 2 === 1 ? <strong key={j}>{part}</strong> : part
+        )
+      }
+      return line
+    }
+
+    // Process citations and bold formatting together
+    const parts: (string | React.ReactElement)[] = []
+    let currentText = line
+    let keyCounter = 0
+    
+    // Find all citation patterns in the text
+    const citationMatches: { citation: Citation, index: number, pattern: string }[] = []
+    citations.forEach(citation => {
+      const pattern = `[${citation.id}]`
+      let searchIndex = 0
+      let index = currentText.indexOf(pattern, searchIndex)
+      while (index !== -1) {
+        citationMatches.push({ citation, index, pattern })
+        searchIndex = index + pattern.length
+        index = currentText.indexOf(pattern, searchIndex)
+      }
+    })
+    
+    // Sort by position in text
+    citationMatches.sort((a, b) => a.index - b.index)
+    
+    console.log('Citation matches found:', citationMatches)
+    
+    let lastIndex = 0
+    citationMatches.forEach(({ citation, index, pattern }) => {
+      // Add text before citation (with bold formatting)
+      if (index > lastIndex) {
+        const textBefore = currentText.slice(lastIndex, index)
+        if (textBefore.includes('**')) {
+          parts.push(...textBefore.split('**').map((part, j) => 
+            j % 2 === 1 ? <strong key={`bold-${keyCounter}-${j}`}>{part}</strong> : part
+          ))
+        } else {
+          parts.push(textBefore)
+        }
+      }
+      
+      // Add clickable citation
+      parts.push(
+        <button
+          key={`citation-${citation.id}-${keyCounter++}`}
+          className="text-blue-400 hover:text-blue-300 underline cursor-pointer mx-0.5 font-medium"
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            console.log('Citation button clicked:', citation)
+            handleCitationClick(citation)
+          }}
+          onMouseDown={(e) => e.preventDefault()}
+          title={`${citation.document_title}${citation.page ? ` (Page ${citation.page})` : ''}`}
+          type="button"
+        >
+          [{citation.id}]
+        </button>
+      )
+      
+      lastIndex = index + pattern.length
+      keyCounter++
+    })
+    
+    // Add any remaining text (with bold formatting)
+    if (lastIndex < currentText.length) {
+      const remainingText = currentText.slice(lastIndex)
+      if (remainingText.includes('**')) {
+        parts.push(...remainingText.split('**').map((part, j) => 
+          j % 2 === 1 ? <strong key={`bold-end-${j}`}>{part}</strong> : part
+        ))
+      } else {
+        parts.push(remainingText)
+      }
+    }
+    
+    console.log('Rendered parts:', parts)
+    return parts.length > 0 ? <>{parts}</> : line
+  }
+
+  // Function to handle citation clicks
+  const handleCitationClick = (citation: Citation) => {
+    console.log('Citation clicked:', citation)
+    
+    // Normalize title for better matching
+    const normalizeTitle = (title: string) => {
+      return title.toLowerCase()
+        .replace(/\s*\([^)]*\)\s*/g, '') // Remove parentheses content
+        .replace(/[^\w\s]/g, '') // Remove special characters
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim()
+    }
+    
+    const normalizedCitationTitle = normalizeTitle(citation.document_title)
+    
+    // Find the document in the documents list with improved matching
+    const targetDoc = documents.find(doc => {
+      const normalizedDocTitle = normalizeTitle(doc.document_title)
+      return normalizedDocTitle.includes(normalizedCitationTitle) || 
+             normalizedCitationTitle.includes(normalizedDocTitle) ||
+             doc.document_id === citation.document_id
+    })
+    
+    console.log('Normalized citation title:', normalizedCitationTitle)
+    console.log('Target document found:', targetDoc)
+    console.log('Available documents:', documents.map(doc => ({
+      id: doc.document_id,
+      title: doc.document_title,
+      normalized: normalizeTitle(doc.document_title)
+    })))
+    
+    if (targetDoc) {
+      console.log('Calling onSelectDocument with:', targetDoc)
+      
+      // Use the new onCitationClick prop if available (for embedded mode)
+      if (onCitationClick) {
+        onCitationClick(targetDoc, citation.page)
+      } else {
+        // Fallback to the original onSelectDocument for standalone mode
+        onSelectDocument(targetDoc, citation.page)
+      }
+      
+      console.log('Citation navigation called successfully')
+      
+      // If there's a page number, you could potentially scroll to that page
+      if (citation.page) {
+        console.log(`Opening document: ${citation.document_title} at page ${citation.page}`)
+        // You could add page navigation logic here
+      }
+    } else {
+      console.log(`Document not found: ${citation.document_title}`)
+      alert(`Document "${citation.document_title}" not found in your library. Please upload it first.`)
+    }
+  }
+
+  function getScoreColor(score: number) {
+    if (score >= 80) return "text-green-500"
+    if (score >= 60) return "text-yellow-500"
+    return "text-red-500"
+  }
+
+  const handleSendMessage = async () => {
+    if (!inputValue.trim() || isThinking) return
+
+    const newMessage: Message = {
+      id: Date.now().toString(),
+      type: "user",
+      content: inputValue,
+    }
+
+    setMessages((prev) => [...prev, newMessage])
+    const currentQuestion = inputValue
+    setInputValue("")
+    setIsThinking(true)
+
+    // Add thinking message
+    const thinkingMessage: Message = {
+      id: `thinking_${Date.now()}`,
+      type: "thinking",
+      content: "",
+    }
+    setMessages((prev) => [...prev, thinkingMessage])
+
+    try {
+      // Call the API to get a real response
+      const api = new ApiClient()
+      const response = await api.askQuestions([currentQuestion], [document.document_id])
+      
+      // Remove thinking message
+      setMessages((prev) => prev.filter(msg => msg.type !== "thinking"))
+      
+      const responseText = response.answers[0] || "I couldn't process your question at the moment."
+      const { text, citations } = parseCitationsFromResponse(responseText)
+      
+      const aiResponse: Message = {
+        id: (Date.now() + 1).toString(),
+        type: "ai",
+        content: "",
+        isStreaming: true,
+        citations,
+      }
+      
+      setMessages((prev) => [...prev, aiResponse])
+      
+      // Stream the response
+      streamText(text, aiResponse.id, citations)
+      
+    } catch (error) {
+      console.error('Failed to get AI response:', error)
+      
+      // Remove thinking message
+      setMessages((prev) => prev.filter(msg => msg.type !== "thinking"))
+      
+      const errorResponse: Message = {
+        id: (Date.now() + 1).toString(),
+        type: "ai",
+        content: "",
+        isStreaming: true,
+      }
+      setMessages((prev) => [...prev, errorResponse])
+      streamText("I'm sorry, I encountered an error while processing your question. Please try again.", errorResponse.id)
+    } finally {
+      setIsThinking(false)
+    }
+  }
+
+  const handleFileUpload = (files: FileList) => {
+    onFileUpload(files)
+  }
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      handleFileUpload(e.target.files)
+    }
+  }
+
+  const subScores = [
+    { name: "User Rights", score: 72 },
+    { name: "Financial Risk", score: 45 },
+    { name: "Termination Terms", score: 80 },
+    { name: "Legal Compliance", score: 85 },
+  ]
+
+  const riskHotspots = [
+    "Clause 5.2: Security Deposit",
+    "Clause 11.1: Automatic Renewal",
+    "Clause 8.3: Late Fee Structure",
+  ]
+
+  return (
+    <div className={`${isEmbedded ? 'h-full' : 'min-h-screen'} ${isEmbedded ? 'bg-zinc-900' : 'bg-black'} ${isEmbedded ? 'text-white' : 'text-white'} flex`}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.doc,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
+        multiple
+        onChange={handleFileInputChange}
+        className="hidden"
+      />
+
+      {/* Left Sidebar */}
+      <div
+        className={`${sidebarCollapsed ? "w-0" : "w-64"} transition-all duration-300 border-r border-zinc-800 flex flex-col`}
+      >
+        <div className="p-3 border-b border-zinc-800">
+          <div className="flex gap-1 mb-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onBack}
+              className="text-zinc-400 hover:text-white text-xs px-2 py-1 h-auto"
+            >
+              <ArrowLeft className="w-3 h-3 mr-1" />
+              Library
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-zinc-400 hover:text-white text-xs px-2 py-1 h-auto"
+              onClick={handleUploadClick}
+            >
+              <Upload className="w-3 h-3 mr-1" />
+              Upload
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3">
+          <h3 className="text-xs font-medium text-zinc-400 mb-2">Documents</h3>
+          <div className="space-y-1">
+            {documents
+              .filter((d) => !d.isProcessing)
+              .map((doc) => (
+                <div
+                  key={doc.document_id}
+                  className={`p-2 rounded cursor-pointer transition-colors ${
+                    doc.document_id === document.document_id ? "bg-white/10 border border-white/20" : "bg-zinc-900 hover:bg-zinc-800"
+                  }`}
+                  onClick={() => onSelectDocument(doc)}
+                >
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-3 h-3 text-zinc-400" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{doc.document_title}</p>
+                      <p className="text-xs text-zinc-500">{new Date(doc.processed_timestamp).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Center Chat Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Chat Header */}
+        <header className="border-b border-zinc-800 px-4 py-3">
+          <h2 className="text-sm font-medium">{document.document_title}</h2>
+        </header>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.map((message) => (
+            <div key={message.id} className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-xl ${message.type === "user" ? "order-2" : "order-1"}`}>
+                {(message.type === "ai" || message.type === "thinking") && (
+                  <div className="flex items-center gap-2 mb-1">
+                    <Avatar className="w-4 h-4">
+                      <AvatarFallback className="bg-white text-black text-xs">CG</AvatarFallback>
+                    </Avatar>
+                    <span className="text-xs text-zinc-400">Contract Guardian</span>
+                  </div>
+                )}
+                <div
+                  className={`p-3 rounded text-sm ${
+                    message.type === "user" ? "bg-zinc-800 text-white" : "bg-zinc-900 text-zinc-100"
+                  }`}
+                >
+                  {message.type === "thinking" ? (
+                    <ThinkingAnimation />
+                  ) : (
+                    <div className="prose prose-invert prose-sm max-w-none">
+                      {message.content.split("\n").map((line, i) => (
+                        <p key={i} className="mb-1 last:mb-0 text-sm">
+                          {renderLineWithFormattingAndCitations(line, message.citations || [])}
+                        </p>
+                      ))}
+                      {message.isStreaming && (
+                        <span className="inline-block w-2 h-4 bg-white animate-pulse ml-1"></span>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Citations */}
+                  {message.citations && message.citations.length > 0 && !message.isStreaming && (
+                    <div className="mt-3 pt-3 border-t border-zinc-700">
+                      <div className="text-xs text-zinc-400 mb-2">Sources:</div>
+                      {message.citations.map((citation) => (
+                        <div key={citation.id} className="text-xs text-zinc-300 mb-1">
+                          <button
+                            className="text-blue-400 hover:text-blue-300 underline cursor-pointer"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              console.log('Source citation clicked:', citation)
+                              handleCitationClick(citation)
+                            }}
+                            type="button"
+                          >
+                            [{citation.id}] {citation.document_title}
+                            {citation.page && ` (Page ${citation.page})`}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Chat Input */}
+        <div className="border-t border-zinc-800 p-4">
+          <div className="flex gap-2">
+            <Input
+              value={inputValue}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
+              placeholder="Type your question here..."
+              className="flex-1 bg-transparent border-none text-sm focus:outline-none text-white placeholder-zinc-500"
+              onKeyPress={(e: React.KeyboardEvent) => e.key === "Enter" && !isThinking && handleSendMessage()}
+              disabled={isThinking}
+            />
+            <Button 
+              onClick={handleSendMessage} 
+              className="bg-white hover:bg-zinc-200 text-black h-8 px-3"
+              disabled={isThinking || !inputValue.trim()}
+            >
+              <Send className="w-3 h-3" />
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Right Analysis Sidebar */}
+      <div className="w-64 border-l border-zinc-800 p-4">
+        <h3 className="text-sm font-medium mb-4">Analysis</h3>
+
+        {/* Overall Score */}
+        <Card className="bg-zinc-900 border-zinc-800 p-4 mb-4">
+          <div className="text-center">
+            <div className="relative w-16 h-16 mx-auto mb-2">
+              <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 100 100">
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="40"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  fill="transparent"
+                  className="text-zinc-700"
+                />
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="40"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  fill="transparent"
+                  strokeDasharray={`${2 * Math.PI * 40}`}
+                  strokeDashoffset={`${2 * Math.PI * 40 * (1 - (document.guardianScore || 0) / 100)}`}
+                  className={
+                    (document.guardianScore || 0) >= 80
+                      ? "text-green-500"
+                      : (document.guardianScore || 0) >= 60
+                        ? "text-yellow-500"
+                        : "text-red-500"
+                  }
+                  strokeLinecap="round"
+                />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-lg font-medium">{document.guardianScore || 0}</span>
+              </div>
+            </div>
+            <p className="text-xs text-zinc-400">Guardian Score</p>
+            <p className={`text-xs font-medium ${getScoreColor(document.guardianScore || 0)}`}>
+              {getScoreText(document.guardianScore || 0)}
+            </p>
+          </div>
+        </Card>
+
+        {/* Sub-Scores */}
+        <div className="mb-4">
+          <h4 className="text-xs font-medium text-zinc-400 mb-2">Breakdown</h4>
+          <div className="space-y-2">
+            {subScores.map((item) => (
+              <div key={item.name}>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-zinc-300">{item.name}</span>
+                  <span className="text-zinc-400">{item.score}</span>
+                </div>
+                <Progress value={item.score} className="h-1" />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Risk Hotspots */}
+        <div>
+          <h4 className="text-xs font-medium text-zinc-400 mb-2">Review</h4>
+          <div className="space-y-1">
+            {riskHotspots.map((hotspot, index) => (
+              <button
+                key={index}
+                className="w-full text-left p-2 rounded bg-zinc-900 hover:bg-zinc-800 transition-colors text-xs text-white hover:text-white"
+                onClick={() => setInputValue(`Can you explain ${hotspot}?`)}
+              >
+                {hotspot}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
