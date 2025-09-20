@@ -80,7 +80,7 @@ api/
 │   ├── vector_store.py         # Hybrid search implementation
 │   └── query_expander.py       # Query enhancement and expansion
 ├── routes/
-│   └── hackrx.py               # API endpoints
+│   └── ragsys.py               # API endpoints
 ├── main.py                     # FastAPI application
 ├── state.py                    # Global state management
 └── settings.py                 # Configuration
@@ -284,7 +284,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### API Endpoint
 ```
-POST /api/v1/hackrx/run
+POST /api/v1/ragsys/run
 Authorization: Bearer 7bf4409966a1479a8578f3258eba4e215cef0f7ccd694a2440149c1eeb4874ef
 Content-Type: application/json
 ```

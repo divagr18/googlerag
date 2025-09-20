@@ -18,6 +18,7 @@ interface TwoColumnChatProps {
 export function TwoColumnChat({ initialDocument, documents, onBack, onFileUpload }: TwoColumnChatProps) {
     const [selectedDocument, setSelectedDocument] = useState<Document>(initialDocument)
     const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined)
+    const [messageToSend, setMessageToSend] = useState<string | null>(null)
 
     const handleSelectDocument = (document: Document, page?: number) => {
         console.log('TwoColumnChat: Selecting document:', document, 'page:', page)
@@ -30,15 +31,22 @@ export function TwoColumnChat({ initialDocument, documents, onBack, onFileUpload
         handleSelectDocument(document, page)
     }
 
+    // Function to send message to chat interface
+    const handleSendMessageToChat = (message: string) => {
+        setMessageToSend(message)
+        // Clear the message after a brief delay to reset state
+        setTimeout(() => setMessageToSend(null), 100)
+    }
+
     return (
         <div className="h-screen flex flex-col bg-gray-50">
             {/* Header */}
-            <div className="flex items-center justify-between p-4 bg-white border-b">
-                <Button variant="ghost" onClick={onBack} className="flex items-center">
+            <div className="flex items-center justify-between p-4 bg-black border-b border-gray-800">
+                <Button variant="ghost" onClick={onBack} className="flex items-center text-white hover:bg-gray-800">
                     <ArrowLeft className="w-4 h-4 mr-2" />
                     Back to Library
                 </Button>
-                <h1 className="text-lg font-semibold text-gray-900">
+                <h1 className="text-lg font-semibold text-white">
                     Document Analysis
                 </h1>
                 <div></div> {/* Spacer for centering */}
@@ -58,6 +66,7 @@ export function TwoColumnChat({ initialDocument, documents, onBack, onFileUpload
                                 onFileUpload={onFileUpload}
                                 onCitationClick={handleCitationClick}
                                 isEmbedded={true}
+                                externalMessage={messageToSend}
                             />
                         </div>
                     </Panel>
@@ -73,6 +82,7 @@ export function TwoColumnChat({ initialDocument, documents, onBack, onFileUpload
                             <DocumentViewer
                                 document={selectedDocument}
                                 highlightPage={highlightPage}
+                                onSendMessage={handleSendMessageToChat}
                             />
                         </div>
                     </Panel>

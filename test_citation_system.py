@@ -135,9 +135,9 @@ if __name__ == "__main__":
         print("\n✅ Citation system implementation verified!")
         print("\nNext steps:")
         print("- Start your FastAPI server: uvicorn api.main:app --reload")
-        print("- Upload documents via the /hackrx/upload endpoint")
-        print("- Ask questions via /hackrx/ask to see citations in action")
-        print("- Manage documents via the new /hackrx/documents endpoints")
+        print("- Upload documents via the /ragsys/upload endpoint")
+        print("- Ask questions via /ragsys/ask to see citations in action")
+        print("- Manage documents via the new /ragsys/documents endpoints")
     else:
         print("\n❌ Some tests failed. Please check the implementation.")
     

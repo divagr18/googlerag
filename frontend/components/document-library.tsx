@@ -82,7 +82,7 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload, onD
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,application/pdf"
+        accept=".pdf,.doc,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
         multiple
         onChange={handleFileChange}
         className="hidden"
@@ -90,86 +90,120 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload, onD
 
       {isDragOver && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-zinc-900 border-2 border-dashed border-white/30 rounded-lg p-8 text-center">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center">
             <Upload className="w-12 h-12 text-white mx-auto mb-4" />
-            <p className="text-white text-lg font-medium">Drop PDF files here</p>
-            <p className="text-zinc-400 text-sm mt-2">Only PDF files are supported</p>
+            <p className="text-white text-lg font-medium">Drop files here</p>
+            <p className="text-zinc-400 text-sm mt-2">PDF, DOCX, and TXT files supported</p>
           </div>
         </div>
       )}
 
-      <header className="border-b border-zinc-800 px-4 py-3">
-        <div className="flex items-center justify-between max-w-6xl mx-auto">
-          <h1 className="text-sm font-medium text-white">Contract Guardian</h1>
-          <Avatar className="w-6 h-6">
-            <AvatarFallback className="bg-zinc-800 text-white text-xs">CG</AvatarFallback>
+      <header className="border-b border-zinc-800 px-6 py-4">
+        <div className="flex items-center justify-between max-w-7xl mx-auto">
+          <h1 className="text-lg font-medium text-white">Contract Guardian</h1>
+          <Avatar className="w-7 h-7">
+            <AvatarFallback className="bg-zinc-800 text-white text-sm">CG</AvatarFallback>
           </Avatar>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-6">
-        <div className="mb-6">
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        <div className="mb-8">
           <Button
             onClick={handleUploadClick}
-            className="bg-white hover:bg-zinc-200 text-black text-xs px-3 py-1.5 h-auto"
+            className="bg-white hover:bg-zinc-100 text-black px-4 py-2 text-sm font-medium"
           >
-            <Upload className="w-3 h-3 mr-1.5" />
+            <Upload className="w-4 h-4 mr-2" />
             Upload
           </Button>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {documents.map((document) => (
             <Card
               key={document.document_id}
-              className={`relative bg-zinc-900 border-zinc-800 hover:border-white/20 transition-colors cursor-pointer group ${document.isProcessing ? "opacity-60" : ""
-                }`}
+              className={`relative bg-black border-zinc-900 hover:border-zinc-800 transition-all duration-200 cursor-pointer group ${document.isProcessing ? "opacity-60" : ""}`}
               onClick={() => !document.isProcessing && onSelectDocument(document)}
             >
-              <div className="p-3">
-                {!document.isProcessing && document.guardianScore && (
-                  <div
-                    className={`absolute -top-1 -right-1 w-5 h-5 rounded-full ${getScoreColor(document.guardianScore)} flex items-center justify-center text-white text-xs font-medium`}
-                  >
-                    {document.guardianScore}
+              <div className="p-4">
+                <div className="flex items-center gap-4">
+                  {/* File Icon */}
+                  <div className="flex-shrink-0">
+                    {document.isProcessing ? (
+                      <Loader2 className="w-8 h-8 text-zinc-500 animate-spin" />
+                    ) : (
+                      <FileText className="w-8 h-8 text-zinc-400" />
+                    )}
+                  </div>
+
+                  {/* Document Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="font-medium text-white text-sm truncate">
+                        {document.document_title}
+                      </h3>
+                      {/* Delete button - integrated into header */}
+                      {!document.isProcessing && onDeleteDocument && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0 border border-red-500/50 text-red-400 hover:text-red-300 hover:bg-red-500/10 hover:border-red-400 transition-all"
+                          onClick={(e) => handleDeleteDocument(document.document_id, e)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-zinc-500 mb-3">
+                      {document.isProcessing ? "Analyzing..." : new Date(document.processed_timestamp).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </p>
+
+                    {/* Guardian Score Progress Bar */}
+                    {!document.isProcessing && (document.guardianScore || document.guardian_score) && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-zinc-400">Guardian Score</span>
+                          <span className="text-sm font-medium text-white">
+                            {document.guardianScore || document.guardian_score}
+                          </span>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-700 ease-out ${getScoreColor(document.guardianScore || document.guardian_score || 0)}`}
+                            style={{ width: `${document.guardianScore || document.guardian_score}%` }}
+                          />
+                        </div>
+
+                        <div className="text-xs text-zinc-500">
+                          {getScoreText(document.guardianScore || document.guardian_score || 0)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Additional Info */}
+                {!document.isProcessing && (document.guardianScore || document.guardian_score) && (
+                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-zinc-900">
+                    {(document.is_contract || document.contract_type) && (
+                      <div className="bg-blue-600 text-white text-xs px-3 py-1.5 rounded-md font-medium border border-blue-500">
+                        {document.contract_type?.toUpperCase() || 'CONTRACT'}
+                      </div>
+                    )}
+                    {(document.exploitation_flags && document.exploitation_flags.length > 0) && (
+                      <div className="bg-red-900/20 text-red-400 text-xs px-2 py-1 rounded">
+                        {document.exploitation_flags.length} issue{document.exploitation_flags.length !== 1 ? 's' : ''}
+                      </div>
+                    )}
                   </div>
                 )}
-
-                {/* Delete button - only show on hover and if not processing */}
-                {!document.isProcessing && onDeleteDocument && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="absolute top-1 left-1 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity bg-red-500/80 hover:bg-red-600 text-white"
-                    onClick={(e) => handleDeleteDocument(document.document_id, e)}
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
-                )}
-
-                <div className="flex justify-center mb-2">
-                  {document.isProcessing ? (
-                    <Loader2 className="w-6 h-6 text-zinc-500 animate-spin" />
-                  ) : (
-                    <FileText className="w-6 h-6 text-zinc-400" />
-                  )}
-                </div>
-
-                <div className="text-center">
-                  <h3 className="font-medium text-white mb-1 text-xs leading-tight line-clamp-2">
-                    {document.document_title}
-                  </h3>
-                  <p className="text-xs text-zinc-500 mb-1">
-                    {document.isProcessing ? "Analyzing..." : new Date(document.processed_timestamp).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })}
-                  </p>
-                  {!document.isProcessing && document.guardianScore && (
-                    <p className="text-xs text-zinc-400">{getScoreText(document.guardianScore)}</p>
-                  )}
-                </div>
               </div>
             </Card>
           ))}

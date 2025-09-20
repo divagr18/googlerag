@@ -5,6 +5,16 @@ import { DocumentLibrary } from "../components/document-library"
 import { TwoColumnChat } from "../components/two-column-chat"
 import { ApiClient } from "../lib/api"
 
+export type ExploitationFlag = {
+  type: string
+  risk_level: string
+  description: string
+  clause_text: string
+  severity_score: number
+  recommendation: string
+  ai_recommendation: string
+}
+
 export type Document = {
   document_id: string
   document_url: string
@@ -12,8 +22,16 @@ export type Document = {
   file_type: string
   processed_timestamp: string
   chunk_count: number
-  guardianScore?: number
+  guardianScore?: number // Legacy field for compatibility
   isProcessing?: boolean
+  // Guardian Score analysis results (backend format)
+  guardian_score?: number
+  is_contract?: boolean
+  contract_type?: string
+  classification_confidence?: number
+  risk_level?: string
+  exploitation_flags?: ExploitationFlag[]
+  analysis_summary?: string
 }
 
 const mockDocuments: Document[] = [
@@ -79,7 +97,9 @@ export default function Home() {
         file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
         file.type === "application/msword" ||
         file.name.toLowerCase().endsWith(".docx") ||
-        file.name.toLowerCase().endsWith(".doc")
+        file.name.toLowerCase().endsWith(".doc") ||
+        file.type === "text/plain" ||
+        file.name.toLowerCase().endsWith(".txt")
 
       if (isValidFile) {
         // Create a temporary document to show uploading state
@@ -111,7 +131,15 @@ export default function Home() {
                   file_type: file.name.split('.').pop()?.toLowerCase() || 'unknown',
                   processed_timestamp: new Date().toISOString(),
                   chunk_count: response.total_chunks,
-                  guardianScore: Math.floor(Math.random() * 100), // Random for now, replace with actual scoring
+                  // Use actual Guardian Score analysis from backend
+                  guardianScore: response.guardian_score || undefined,
+                  guardian_score: response.guardian_score || undefined, // Keep backend format too
+                  is_contract: response.is_contract || false,
+                  contract_type: response.contract_type || undefined,
+                  classification_confidence: response.classification_confidence || 0,
+                  risk_level: response.risk_level || undefined,
+                  exploitation_flags: response.exploitation_flags || undefined,
+                  analysis_summary: response.analysis_summary || undefined,
                   isProcessing: false,
                 }
                 : doc

@@ -116,7 +116,8 @@ class ChromaDocumentManager:
         url: str, 
         chunks: List[Dict], 
         embeddings: np.ndarray,
-        force_update: bool = False
+        force_update: bool = False,
+        analysis_data: Optional[Dict] = None
     ) -> str:
         """
         Store document chunks with embeddings and metadata.
@@ -160,7 +161,7 @@ class ChromaDocumentManager:
             chunk_texts.append(chunk['text'])
             chunk_embeddings.append(embeddings[i].tolist())
             
-            # Enhanced metadata with citation information
+            # Enhanced metadata with citation information and Guardian Score data
             metadata = {
                 "document_id": document_id,
                 "document_url": url,
@@ -172,6 +173,18 @@ class ChromaDocumentManager:
                 "processed_timestamp": processing_timestamp,
                 "processing_version": "v1.0"
             }
+            
+            # Add Guardian Score analysis data to the first chunk only to avoid duplication
+            if i == 0 and analysis_data:
+                metadata.update({
+                    "guardian_score": analysis_data.get("guardian_score"),
+                    "risk_level": analysis_data.get("risk_level"),
+                    "is_contract": analysis_data.get("is_contract", False),
+                    "contract_type": analysis_data.get("contract_type"),
+                    "exploitation_flags": str(analysis_data.get("exploitation_flags", [])),  # Store as string for ChromaDB
+                    "analysis_summary": analysis_data.get("analysis_summary")
+                })
+            
             chunk_metadatas.append(metadata)
         
         # Store in ChromaDB
@@ -312,14 +325,40 @@ class ChromaDocumentManager:
             for metadata in results['metadatas']:
                 doc_id = metadata["document_id"]
                 if doc_id not in documents:
+                    # Extract Guardian Score data from the first chunk (chunk_index 0)
+                    guardian_data = {}
+                    if metadata.get("chunk_index") == 0:
+                        guardian_data = {
+                            "guardian_score": metadata.get("guardian_score"),
+                            "risk_level": metadata.get("risk_level"),
+                            "is_contract": metadata.get("is_contract", False),
+                            "contract_type": metadata.get("contract_type"),
+                            "exploitation_flags": eval(metadata.get("exploitation_flags", "[]")) if metadata.get("exploitation_flags") else [],
+                            "analysis_summary": metadata.get("analysis_summary")
+                        }
+                    
                     documents[doc_id] = {
                         "document_id": doc_id,
                         "document_url": metadata["document_url"],
                         "document_title": metadata["document_title"],
                         "file_type": metadata["file_type"],
                         "processed_timestamp": metadata["processed_timestamp"],
-                        "chunk_count": 0
+                        "chunk_count": 0,
+                        **guardian_data
                     }
+                    
+                # If this is the first chunk and we don't have Guardian data yet, add it
+                if metadata.get("chunk_index") == 0 and not documents[doc_id].get("guardian_score"):
+                    if metadata.get("guardian_score"):
+                        documents[doc_id].update({
+                            "guardian_score": metadata.get("guardian_score"),
+                            "risk_level": metadata.get("risk_level"),
+                            "is_contract": metadata.get("is_contract", False),
+                            "contract_type": metadata.get("contract_type"),
+                            "exploitation_flags": eval(metadata.get("exploitation_flags", "[]")) if metadata.get("exploitation_flags") else [],
+                            "analysis_summary": metadata.get("analysis_summary")
+                        })
+                        
                 documents[doc_id]["chunk_count"] += 1
             
             return list(documents.values())

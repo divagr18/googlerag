@@ -28,6 +28,15 @@ async def lifespan(app: FastAPI):
     # Store manager in shared state
     ml_models["embedding_manager"] = manager
     print("✅ Embedding manager loaded successfully.")
+    
+    # Initialize AI model for contract recommendations
+    try:
+        from api.core.simple_ai_model import initialize_ai_model
+        ai_model = initialize_ai_model()
+        print("✅ AI recommendation model loaded successfully.")
+    except Exception as e:
+        print(f"⚠️ AI model initialization failed: {str(e)}")
+        print("Guardian Score will use static recommendations.")
     print(ml_models)
 
     yield
