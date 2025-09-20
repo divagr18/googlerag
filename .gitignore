@@ -51,3 +51,4 @@ yarn.lock
 # System files
 Thumbs.db
 ehthumbs.db
+frontend/.next/

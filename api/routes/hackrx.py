@@ -384,31 +384,33 @@ async def upload_file(
             raise HTTPException(status_code=503, detail="Embedding manager not ready")
         chroma_manager = ChromaDocumentManager()
         
-        # Create a temporary file to save the uploaded content
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
-            # Copy uploaded file content to temporary file
-            shutil.copyfileobj(file.file, temp_file)
-            temp_file_path = temp_file.name
+        # Create uploads directory if it doesn't exist
+        uploads_dir = "uploads"
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        # Save file permanently to uploads directory
+        file_path = os.path.join(uploads_dir, filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
         
         try:
-            # Use the temporary file path as the document URL
-            document_url = f"file://{temp_file_path}"
+            # Use the filename URL for database storage
+            filename_url = f"uploaded://{filename}"
             
             # Check if document with this filename already exists
-            # We'll use the filename as a unique identifier
-            filename_url = f"uploaded://{filename}"
             if chroma_manager.document_exists(filename_url):
+                # Remove the saved file if document already exists
+                os.unlink(file_path)
                 raise HTTPException(
                     status_code=409, 
                     detail=f"File '{filename}' already exists in database. Use a different filename or delete the existing file first."
                 )
             
-            # Process document directly from local file (no downloading needed)
+            # Process document directly from local file
             print(f"🔄 Processing uploaded file: {filename}")
             
-            # For local files, we can process them directly without streaming/downloading
-            # Just read the file and pass it to the document processor
-            pages_data = await process_local_file(temp_file_path)
+            # Process the permanently saved file
+            pages_data = await process_local_file(file_path)
             chunks, precomputed_embeddings = await optimized_semantic_chunk_text(
                 pages_data, manager, document_url=filename_url  # Use filename_url for storage
             )
@@ -434,12 +436,14 @@ async def upload_file(
                 total_chunks=len(chunks)
             )
             
-        finally:
-            # Clean up temporary file
+        except Exception as e:
+            # Clean up saved file on error
             try:
-                os.unlink(temp_file_path)
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
             except OSError:
                 pass  # File might already be deleted
+            raise e
         
     except HTTPException:
         raise
@@ -851,13 +855,75 @@ async def serve_file(document_id: str):
                 content_type = "application/octet-stream"
             
             from fastapi.responses import FileResponse
-            return FileResponse(
-                path=file_path,
-                media_type=content_type,
-                filename=filename
-            )
+            
+            # For PDFs, we want inline viewing, not download
+            if filename.lower().endswith('.pdf'):
+                from fastapi.responses import Response
+                with open(file_path, "rb") as f:
+                    content = f.read()
+                return Response(
+                    content=content,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": "inline",
+                        "Content-Type": "application/pdf"
+                    }
+                )
+            else:
+                # For other file types, use regular FileResponse
+                return FileResponse(
+                    path=file_path,
+                    media_type=content_type,
+                    filename=filename
+                )
         else:
             raise HTTPException(status_code=400, detail="File is not an uploaded document")
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error serving file: {str(e)}")
+
+
+@hackrx_router.delete("/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a document from the database and file system"""
+    try:
+        chroma_manager = ChromaDocumentManager()
+        
+        # Get document metadata before deletion
+        documents = chroma_manager.list_documents()
+        target_doc = None
+        for doc in documents:
+            if doc["document_id"] == document_id:
+                target_doc = doc
+                break
+        
+        if not target_doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Delete from ChromaDB
+        success = chroma_manager.delete_document_by_id(document_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete document from database")
+        
+        # Delete file from uploads directory if it's an uploaded file
+        if target_doc["document_url"].startswith("uploaded://"):
+            filename = target_doc["document_url"].replace("uploaded://", "")
+            file_path = os.path.join("uploads", filename)
+            
+            if os.path.exists(file_path):
+                try:
+                    os.unlink(file_path)
+                    print(f"✅ Deleted file: {file_path}")
+                except OSError as e:
+                    print(f"⚠️ Warning: Could not delete file {file_path}: {e}")
+                    # Don't fail the request if file deletion fails
+        
+        return JSONResponse(content={
+            "message": f"Document '{target_doc['document_title']}' deleted successfully",
+            "document_id": document_id
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")

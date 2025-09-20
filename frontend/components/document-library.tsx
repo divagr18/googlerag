@@ -5,7 +5,7 @@ import type React from "react"
 import { Button } from "./ui/button"
 import { Card } from "./ui/card"
 import { Avatar, AvatarFallback } from "./ui/avatar"
-import { Upload, FileText, Loader2 } from "lucide-react"
+import { Upload, FileText, Loader2, Trash2 } from "lucide-react"
 import type { Document } from "@/app/page"
 import { useRef, useState, type DragEvent } from "react"
 
@@ -13,9 +13,10 @@ interface DocumentLibraryProps {
   documents: Document[]
   onSelectDocument: (document: Document) => void
   onFileUpload: (files: FileList) => void
+  onDeleteDocument?: (documentId: string) => void
 }
 
-export function DocumentLibrary({ documents, onSelectDocument, onFileUpload }: DocumentLibraryProps) {
+export function DocumentLibrary({ documents, onSelectDocument, onFileUpload, onDeleteDocument }: DocumentLibraryProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
 
@@ -61,6 +62,13 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload }: D
     const files = e.dataTransfer.files
     if (files && files.length > 0) {
       onFileUpload(files)
+    }
+  }
+
+  const handleDeleteDocument = (documentId: string, e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent card click
+    if (onDeleteDocument && confirm('Are you sure you want to delete this document?')) {
+      onDeleteDocument(documentId)
     }
   }
 
@@ -114,9 +122,8 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload }: D
           {documents.map((document) => (
             <Card
               key={document.document_id}
-              className={`relative bg-zinc-900 border-zinc-800 hover:border-white/20 transition-colors cursor-pointer ${
-                document.isProcessing ? "opacity-60" : ""
-              }`}
+              className={`relative bg-zinc-900 border-zinc-800 hover:border-white/20 transition-colors cursor-pointer group ${document.isProcessing ? "opacity-60" : ""
+                }`}
               onClick={() => !document.isProcessing && onSelectDocument(document)}
             >
               <div className="p-3">
@@ -126,6 +133,18 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload }: D
                   >
                     {document.guardianScore}
                   </div>
+                )}
+
+                {/* Delete button - only show on hover and if not processing */}
+                {!document.isProcessing && onDeleteDocument && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 left-1 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity bg-red-500/80 hover:bg-red-600 text-white"
+                    onClick={(e) => handleDeleteDocument(document.document_id, e)}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
                 )}
 
                 <div className="flex justify-center mb-2">
@@ -143,7 +162,7 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload }: D
                   <p className="text-xs text-zinc-500 mb-1">
                     {document.isProcessing ? "Analyzing..." : new Date(document.processed_timestamp).toLocaleDateString("en-US", {
                       month: "short",
-                      day: "numeric", 
+                      day: "numeric",
                       year: "numeric",
                     })}
                   </p>

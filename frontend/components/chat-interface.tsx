@@ -80,28 +80,28 @@ What would you like to explore first?`,
     const interval = setInterval(() => {
       if (index <= text.length) {
         const currentContent = text.slice(0, index)
-        setMessages(prev => prev.map(msg => 
-          msg.id === messageId 
-            ? { 
-                ...msg, 
-                content: currentContent, 
-                isStreaming: index < text.length,
-                citations: citations || []
-              } 
+        setMessages(prev => prev.map(msg =>
+          msg.id === messageId
+            ? {
+              ...msg,
+              content: currentContent,
+              isStreaming: index < text.length,
+              citations: citations || []
+            }
             : msg
         ))
         index++
       } else {
         clearInterval(interval)
         // Final update to ensure citations are properly set
-        setMessages(prev => prev.map(msg => 
-          msg.id === messageId 
-            ? { 
-                ...msg, 
-                content: text, 
-                isStreaming: false,
-                citations: citations || []
-              } 
+        setMessages(prev => prev.map(msg =>
+          msg.id === messageId
+            ? {
+              ...msg,
+              content: text,
+              isStreaming: false,
+              citations: citations || []
+            }
             : msg
         ))
       }
@@ -110,103 +110,143 @@ What would you like to explore first?`,
 
   // Function to parse citations from response and convert to numbered format
   const parseCitationsFromResponse = (content: string): { text: string, citations: Citation[] } => {
+    console.log('🔍 RAW API RESPONSE START 🔍')
+    console.log(content)
+    console.log('🔍 RAW API RESPONSE END 🔍')
+
     const citations: Citation[] = []
-    
-    // Extract sources section if it exists
-    const sourcesMatch = content.match(/Sources:\s*([\s\S]*?)$/i)
+
+    // First, check if content contains any citation-like patterns
+    const citationPattern = /\[(\d+)\]/g
+    const citationMatches = content.match(citationPattern)
+    console.log('Found citation patterns:', citationMatches)
+
+    // Look for Sources section (with various formats)
+    let sourcesMatch = content.match(/Sources?:\s*([\s\S]*?)$/i)
+
+    // If no "Sources:" section, look for other patterns like "(See sections..."
+    if (!sourcesMatch) {
+      const seeMatch = content.match(/\(See sections? on ([^)]+)\)/i)
+      if (seeMatch) {
+        console.log('Found "See sections" pattern:', seeMatch[1])
+        // Convert to mock sources format
+        const sections = seeMatch[1].split(/,\s*(?:and\s*)?/)
+        sections.forEach((section, index) => {
+          citations.push({
+            id: index + 1,
+            document_title: section.trim(),
+            document_id: `doc_${index + 1}`,
+            page: undefined
+          })
+        })
+      }
+    }
+
     let mainText = content
-    
+
     if (sourcesMatch) {
       const sourcesText = sourcesMatch[1]
+      console.log('Found Sources section:', sourcesText)
+
       // Remove the entire sources section from the main text
       mainText = content.replace(sourcesMatch[0], '').trim()
-      
-      // Parse individual sources - handle both bullet points and numbered citations
+
+      // Parse individual sources - handle multiple formats
       const sourceLines = sourcesText.split(/\n+/).filter(line => line.trim())
-      let citationCounter = 1
-      
-      sourceLines.forEach(line => {
-        // Match patterns like "• [1] Document Name (PDF, Page X)" 
-        const bulletMatch = line.match(/[•·]\s*\[(\d+)\]\s*(.*?)\s*(?:\((.*?),?\s*Page\s*(\d+)\)|$)/)
-        if (bulletMatch) {
-          const citationNum = parseInt(bulletMatch[1])
-          let docTitle = bulletMatch[2].trim()
-          
+      console.log('Source lines:', sourceLines)
+
+      sourceLines.forEach((line, index) => {
+        console.log(`Processing source line ${index}:`, line)
+
+        // Try multiple patterns
+        // Pattern 1: "• [1] Document Name (PDF, Page X)"
+        let match = line.match(/[•·]\s*\[(\d+)\]\s*(.*?)\s*(?:\((.*?),?\s*Page\s*(\d+)\)|$)/)
+        if (!match) {
+          // Pattern 2: "[1] Document Name (Page X)"
+          match = line.match(/\[(\d+)\]\s*(.*?)\s*(?:\(Page\s*(\d+)\)|$)/)
+        }
+        if (!match) {
+          // Pattern 3: "1. Document Name"
+          match = line.match(/(\d+)\.\s*(.*?)(?:\s*\(Page\s*(\d+)\)|$)/)
+        }
+        if (!match) {
+          // Pattern 4: "• [1] Document Name (Page X)" - numbered format
+          match = line.match(/[•·]\s*\[(\d+)\]\s*(.*?)\s*(?:\(.*?Page\s*(\d+)\)|$)/)
+        }
+        if (!match) {
+          // Pattern 5: "• Document Name (Page X)" - no number, assign index
+          const simpleMatch = line.match(/[•·]\s*(.*?)\s*(?:\(.*?Page\s*(\d+)\)|$)/)
+          if (simpleMatch) {
+            // Create a match array with index-based numbering
+            match = [simpleMatch[0], (index + 1).toString(), simpleMatch[1], simpleMatch[2]]
+          }
+        }
+
+        if (match) {
+          const citationNum = parseInt(match[1])
+          let docTitle = match[2].trim()
+
           // Remove file type suffix if present (like "(PDF)")
           docTitle = docTitle.replace(/\s*\([^)]*\)\s*$/, '').trim()
-          
-          const pageNum = bulletMatch[4] ? parseInt(bulletMatch[4]) : undefined
-          
+
+          // Extract page number from the correct match group
+          let pageNum: number | undefined = undefined
+
+          // For Pattern 1: "• [1] Document Name (PDF, Page X)" - page is in match[4]
+          if (match[4]) {
+            pageNum = parseInt(match[4])
+          }
+          // For Pattern 2 and others: page might be in match[3]
+          else if (match[3]) {
+            pageNum = parseInt(match[3])
+          }
+
+          console.log(`Parsed citation: [${citationNum}] ${docTitle} (Page ${pageNum})`)
+
           citations.push({
             id: citationNum,
             document_title: docTitle,
             document_id: `doc_${citationNum}`,
             page: pageNum
           })
+        } else {
+          console.log('No match found for line:', line)
         }
       })
-      
-      // Now we need to add citation numbers into the main text where appropriate
-      // Look for logical places to insert citations based on content
-      if (citations.length > 0 && mainText) {
-        // Split into sentences and add citations strategically
-        const sentences = mainText.split(/(?<=[.!?])\s+/)
-        
-        // Add first few citations to early sentences
-        if (sentences.length >= 1 && citations[0]) {
-          sentences[0] = sentences[0] + ` [${citations[0].id}]`
-        }
-        if (sentences.length >= 2 && citations[1]) {
-          sentences[1] = sentences[1] + ` [${citations[1].id}]`
-        }
-        
-        // Add more citations to later sentences if available
-        for (let i = 2; i < Math.min(citations.length, sentences.length); i++) {
-          if (citations[i] && sentences[i]) {
-            sentences[i] = sentences[i] + ` [${citations[i].id}]`
-          }
-        }
-        
-        mainText = sentences.join(' ')
-      }
-      
-      console.log('Original content:', content)
-      console.log('Sources section:', sourcesText)
-      console.log('Main text after sources removed:', mainText)
-      console.log('All parsed citations:', citations)
-      
-      return { text: mainText, citations }
     }
-    
-    return { text: mainText, citations: [] }
+
+    console.log('Final parsed citations:', citations)
+    console.log('Main text after processing:', mainText)
+
+    return { text: mainText, citations }
   }
 
   // Function to render text with clickable citation numbers
   const renderTextWithCitations = (text: string, citations: Citation[]) => {
     if (!citations.length) return text
-    
+
     // Split text by citation patterns and render as React elements
     const parts: (string | React.ReactElement)[] = []
     let currentText = text
     let keyCounter = 0
-    
+
     // Sort citations by their position in the text to process them in order
     const sortedCitations = [...citations].sort((a, b) => {
       const aIndex = currentText.indexOf(`[${a.id}]`)
       const bIndex = currentText.indexOf(`[${b.id}]`)
       return aIndex - bIndex
     })
-    
+
     sortedCitations.forEach((citation) => {
       const citationPattern = `[${citation.id}]`
       const index = currentText.indexOf(citationPattern)
-      
+
       if (index !== -1) {
         // Add text before citation
         if (index > 0) {
           parts.push(currentText.slice(0, index))
         }
-        
+
         // Add clickable citation
         parts.push(
           <button
@@ -222,17 +262,17 @@ What would you like to explore first?`,
             {citationPattern}
           </button>
         )
-        
+
         // Update currentText to the remaining part
         currentText = currentText.slice(index + citationPattern.length)
       }
     })
-    
+
     // Add any remaining text
     if (currentText.length > 0) {
       parts.push(currentText)
     }
-    
+
     return parts.length > 0 ? <>{parts}</> : text
   }
 
@@ -240,11 +280,11 @@ What would you like to explore first?`,
   const renderLineWithFormattingAndCitations = (line: string, citations: Citation[]) => {
     console.log('Rendering line:', line)
     console.log('With citations:', citations)
-    
+
     // If no citations, just handle bold formatting
     if (!citations.length) {
       if (line.includes('**')) {
-        return line.split('**').map((part, j) => 
+        return line.split('**').map((part, j) =>
           j % 2 === 1 ? <strong key={j}>{part}</strong> : part
         )
       }
@@ -255,7 +295,7 @@ What would you like to explore first?`,
     const parts: (string | React.ReactElement)[] = []
     let currentText = line
     let keyCounter = 0
-    
+
     // Find all citation patterns in the text
     const citationMatches: { citation: Citation, index: number, pattern: string }[] = []
     citations.forEach(citation => {
@@ -268,26 +308,26 @@ What would you like to explore first?`,
         index = currentText.indexOf(pattern, searchIndex)
       }
     })
-    
+
     // Sort by position in text
     citationMatches.sort((a, b) => a.index - b.index)
-    
+
     console.log('Citation matches found:', citationMatches)
-    
+
     let lastIndex = 0
     citationMatches.forEach(({ citation, index, pattern }) => {
       // Add text before citation (with bold formatting)
       if (index > lastIndex) {
         const textBefore = currentText.slice(lastIndex, index)
         if (textBefore.includes('**')) {
-          parts.push(...textBefore.split('**').map((part, j) => 
+          parts.push(...textBefore.split('**').map((part, j) =>
             j % 2 === 1 ? <strong key={`bold-${keyCounter}-${j}`}>{part}</strong> : part
           ))
         } else {
           parts.push(textBefore)
         }
       }
-      
+
       // Add clickable citation
       parts.push(
         <button
@@ -306,23 +346,23 @@ What would you like to explore first?`,
           [{citation.id}]
         </button>
       )
-      
+
       lastIndex = index + pattern.length
       keyCounter++
     })
-    
+
     // Add any remaining text (with bold formatting)
     if (lastIndex < currentText.length) {
       const remainingText = currentText.slice(lastIndex)
       if (remainingText.includes('**')) {
-        parts.push(...remainingText.split('**').map((part, j) => 
+        parts.push(...remainingText.split('**').map((part, j) =>
           j % 2 === 1 ? <strong key={`bold-end-${j}`}>{part}</strong> : part
         ))
       } else {
         parts.push(remainingText)
       }
     }
-    
+
     console.log('Rendered parts:', parts)
     return parts.length > 0 ? <>{parts}</> : line
   }
@@ -330,7 +370,7 @@ What would you like to explore first?`,
   // Function to handle citation clicks
   const handleCitationClick = (citation: Citation) => {
     console.log('Citation clicked:', citation)
-    
+
     // Normalize title for better matching
     const normalizeTitle = (title: string) => {
       return title.toLowerCase()
@@ -339,17 +379,17 @@ What would you like to explore first?`,
         .replace(/\s+/g, ' ') // Normalize whitespace
         .trim()
     }
-    
+
     const normalizedCitationTitle = normalizeTitle(citation.document_title)
-    
+
     // Find the document in the documents list with improved matching
     const targetDoc = documents.find(doc => {
       const normalizedDocTitle = normalizeTitle(doc.document_title)
-      return normalizedDocTitle.includes(normalizedCitationTitle) || 
-             normalizedCitationTitle.includes(normalizedDocTitle) ||
-             doc.document_id === citation.document_id
+      return normalizedDocTitle.includes(normalizedCitationTitle) ||
+        normalizedCitationTitle.includes(normalizedDocTitle) ||
+        doc.document_id === citation.document_id
     })
-    
+
     console.log('Normalized citation title:', normalizedCitationTitle)
     console.log('Target document found:', targetDoc)
     console.log('Available documents:', documents.map(doc => ({
@@ -357,10 +397,10 @@ What would you like to explore first?`,
       title: doc.document_title,
       normalized: normalizeTitle(doc.document_title)
     })))
-    
+
     if (targetDoc) {
       console.log('Calling onSelectDocument with:', targetDoc)
-      
+
       // Use the new onCitationClick prop if available (for embedded mode)
       if (onCitationClick) {
         onCitationClick(targetDoc, citation.page)
@@ -368,9 +408,9 @@ What would you like to explore first?`,
         // Fallback to the original onSelectDocument for standalone mode
         onSelectDocument(targetDoc, citation.page)
       }
-      
+
       console.log('Citation navigation called successfully')
-      
+
       // If there's a page number, you could potentially scroll to that page
       if (citation.page) {
         console.log(`Opening document: ${citation.document_title} at page ${citation.page}`)
@@ -414,13 +454,21 @@ What would you like to explore first?`,
       // Call the API to get a real response
       const api = new ApiClient()
       const response = await api.askQuestions([currentQuestion], [document.document_id])
-      
+
       // Remove thinking message
       setMessages((prev) => prev.filter(msg => msg.type !== "thinking"))
-      
+
       const responseText = response.answers[0] || "I couldn't process your question at the moment."
+
+      // Add detailed logging
+      console.log('=== FULL API RESPONSE DEBUG ===')
+      console.log('Full response object:', response)
+      console.log('Response text:', responseText)
+      console.log('Response length:', responseText.length)
+      console.log('=== END API RESPONSE DEBUG ===')
+
       const { text, citations } = parseCitationsFromResponse(responseText)
-      
+
       const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
         type: "ai",
@@ -428,18 +476,18 @@ What would you like to explore first?`,
         isStreaming: true,
         citations,
       }
-      
+
       setMessages((prev) => [...prev, aiResponse])
-      
+
       // Stream the response
       streamText(text, aiResponse.id, citations)
-      
+
     } catch (error) {
       console.error('Failed to get AI response:', error)
-      
+
       // Remove thinking message
       setMessages((prev) => prev.filter(msg => msg.type !== "thinking"))
-      
+
       const errorResponse: Message = {
         id: (Date.now() + 1).toString(),
         type: "ai",
@@ -526,9 +574,8 @@ What would you like to explore first?`,
               .map((doc) => (
                 <div
                   key={doc.document_id}
-                  className={`p-2 rounded cursor-pointer transition-colors ${
-                    doc.document_id === document.document_id ? "bg-white/10 border border-white/20" : "bg-zinc-900 hover:bg-zinc-800"
-                  }`}
+                  className={`p-2 rounded cursor-pointer transition-colors ${doc.document_id === document.document_id ? "bg-white/10 border border-white/20" : "bg-zinc-900 hover:bg-zinc-800"
+                    }`}
                   onClick={() => onSelectDocument(doc)}
                 >
                   <div className="flex items-center gap-2">
@@ -569,9 +616,8 @@ What would you like to explore first?`,
                   </div>
                 )}
                 <div
-                  className={`p-3 rounded text-sm ${
-                    message.type === "user" ? "bg-zinc-800 text-white" : "bg-zinc-900 text-zinc-100"
-                  }`}
+                  className={`p-3 rounded text-sm ${message.type === "user" ? "bg-zinc-800 text-white" : "bg-zinc-900 text-zinc-100"
+                    }`}
                 >
                   {message.type === "thinking" ? (
                     <ThinkingAnimation />
@@ -587,7 +633,7 @@ What would you like to explore first?`,
                       )}
                     </div>
                   )}
-                  
+
                   {/* Citations */}
                   {message.citations && message.citations.length > 0 && !message.isStreaming && (
                     <div className="mt-3 pt-3 border-t border-zinc-700">
@@ -628,8 +674,8 @@ What would you like to explore first?`,
               onKeyPress={(e: React.KeyboardEvent) => e.key === "Enter" && !isThinking && handleSendMessage()}
               disabled={isThinking}
             />
-            <Button 
-              onClick={handleSendMessage} 
+            <Button
+              onClick={handleSendMessage}
               className="bg-white hover:bg-zinc-200 text-black h-8 px-3"
               disabled={isThinking || !inputValue.trim()}
             >

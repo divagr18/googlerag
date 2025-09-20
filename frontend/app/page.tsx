@@ -50,7 +50,7 @@ export default function Home() {
   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null)
   const [documents, setDocuments] = useState<Document[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  
+
   // Fetch documents on component mount
   useEffect(() => {
     const fetchDocuments = async () => {
@@ -67,7 +67,7 @@ export default function Home() {
         setIsLoading(false)
       }
     }
-    
+
     fetchDocuments()
   }, [])
 
@@ -99,21 +99,21 @@ export default function Home() {
         try {
           const api = new ApiClient()
           const response = await api.uploadFile(file)
-          
+
           // Replace the temporary document with the real one
           setDocuments((prev) =>
             prev.map((doc) =>
-              doc.document_id === tempDocument.document_id 
+              doc.document_id === tempDocument.document_id
                 ? {
-                    document_id: response.document_id,
-                    document_url: `uploaded://${file.name}`,
-                    document_title: file.name,
-                    file_type: file.name.split('.').pop()?.toLowerCase() || 'unknown',
-                    processed_timestamp: new Date().toISOString(),
-                    chunk_count: response.total_chunks,
-                    guardianScore: Math.floor(Math.random() * 100), // Random for now, replace with actual scoring
-                    isProcessing: false,
-                  }
+                  document_id: response.document_id,
+                  document_url: `uploaded://${file.name}`,
+                  document_title: file.name,
+                  file_type: file.name.split('.').pop()?.toLowerCase() || 'unknown',
+                  processed_timestamp: new Date().toISOString(),
+                  chunk_count: response.total_chunks,
+                  guardianScore: Math.floor(Math.random() * 100), // Random for now, replace with actual scoring
+                  isProcessing: false,
+                }
                 : doc
             )
           )
@@ -125,6 +125,21 @@ export default function Home() {
         }
       }
     })
+  }
+
+  const handleDeleteDocument = async (documentId: string) => {
+    try {
+      const api = new ApiClient()
+      await api.deleteDocument(documentId)
+
+      // Remove the document from the local state
+      setDocuments((prev) => prev.filter(doc => doc.document_id !== documentId))
+
+      console.log('Document deleted successfully')
+    } catch (error) {
+      console.error('Failed to delete document:', error)
+      alert('Failed to delete document. Please try again.')
+    }
   }
 
   if (selectedDocument) {
@@ -139,6 +154,11 @@ export default function Home() {
   }
 
   return (
-    <DocumentLibrary documents={documents} onSelectDocument={setSelectedDocument} onFileUpload={handleFileUpload} />
+    <DocumentLibrary
+      documents={documents}
+      onSelectDocument={setSelectedDocument}
+      onFileUpload={handleFileUpload}
+      onDeleteDocument={handleDeleteDocument}
+    />
   )
 }

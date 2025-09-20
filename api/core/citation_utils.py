@@ -219,7 +219,7 @@ class CitationManager:
         max_citations: int = 3
     ) -> str:
         """
-        Add citations to an answer based on the chunks used.
+        Add numbered citations to an answer based on the chunks used.
         
         Args:
             answer: The generated answer text
@@ -228,15 +228,74 @@ class CitationManager:
             max_citations: Maximum number of citations to include
             
         Returns:
-            Answer with citations appended
+            Answer with numbered citations [1] [2] and sources section appended
         """
         citations = CitationManager.extract_citations_from_chunks(chunks_with_metadata)
         
         if not citations:
             return answer
         
-        citations_section = CitationManager.format_citations_section(
-            citations, format_type, max_citations
-        )
+        # Limit citations
+        limited_citations = citations[:max_citations]
         
-        return answer + citations_section
+        # Add numbered citations distributed throughout the answer text
+        sentences = answer.split('. ')
+        modified_sentences = []
+        citation_index = 0
+        
+        # Distribute citations across sentences
+        for i, sentence in enumerate(sentences):
+            modified_sentence = sentence
+            
+            # Add citation every few sentences, ensuring all citations are used
+            if citation_index < len(limited_citations):
+                # Strategy: place citations in first sentence, middle sentences, and last sentence
+                should_add_citation = (
+                    i == 0 or  # First sentence
+                    i == len(sentences) - 1 or  # Last sentence
+                    (len(sentences) > 2 and i == len(sentences) // 2)  # Middle sentence
+                )
+                
+                # If we still have citations left and we're running out of sentences
+                if citation_index < len(limited_citations) - 1 and i >= len(sentences) - (len(limited_citations) - citation_index):
+                    should_add_citation = True
+                
+                if should_add_citation and citation_index < len(limited_citations):
+                    # Add citation number to the sentence
+                    if not sentence.endswith('.'):
+                        modified_sentence += f" [{citation_index + 1}]."
+                    else:
+                        modified_sentence = sentence[:-1] + f" [{citation_index + 1}]."
+                    citation_index += 1
+                elif not sentence.endswith('.') and i < len(sentences) - 1:
+                    modified_sentence += "."
+            elif not sentence.endswith('.') and i < len(sentences) - 1:
+                modified_sentence += "."
+            
+            modified_sentences.append(modified_sentence)
+        
+        # Join sentences back
+        answer_with_numbers = ' '.join(modified_sentences)
+        
+        # Create numbered sources section
+        sources_lines = []
+        for i, citation in enumerate(limited_citations, 1):
+            title = citation['document_title']
+            page = citation['page_number']
+            file_type = citation['file_type'].upper()
+            
+            if page and page > 1:
+                source_line = f"[{i}] {title} ({file_type}, Page {page})"
+            else:
+                source_line = f"[{i}] {title} ({file_type})"
+            sources_lines.append(source_line)
+        
+        # Format the sources section
+        if format_type == "markdown":
+            sources_section = "\n\n**Sources:**\n• " + "\n• ".join(sources_lines)
+        elif format_type == "html":
+            sources_section = "<br><br><strong>Sources:</strong><br>• " + "<br>• ".join(sources_lines)
+        else:  # text format
+            sources_section = "\n\nSources:\n• " + "\n• ".join(sources_lines)
+        
+        return answer_with_numbers + sources_section

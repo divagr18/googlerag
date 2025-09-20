@@ -278,9 +278,12 @@ class ChromaDocumentManager:
         return None
     
     def delete_document(self, url: str) -> bool:
-        """Delete all chunks for a document."""
+        """Delete all chunks for a document by URL."""
         document_id = self._generate_document_id(url)
-        
+        return self.delete_document_by_id(document_id)
+    
+    def delete_document_by_id(self, document_id: str) -> bool:
+        """Delete all chunks for a document by document ID."""
         try:
             # Get all chunk IDs for this document
             results = self.collection.get(
@@ -289,7 +292,7 @@ class ChromaDocumentManager:
             
             if results['ids']:
                 self.collection.delete(ids=results['ids'])
-                print(f"🗑️ Deleted {len(results['ids'])} chunks for document: {url[:50]}...")
+                print(f"🗑️ Deleted {len(results['ids'])} chunks for document ID: {document_id}")
                 return True
                 
         except Exception as e:
