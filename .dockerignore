@@ -18,8 +18,10 @@
 
 scripts/
 
+# Frontend (built separately)
+frontend/
+
 # Ignore .env files
-.env
 .envrc
 
 # ignore storage dir

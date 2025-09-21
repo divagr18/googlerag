@@ -21,6 +21,15 @@ At its core is a latency-aware architecture that classifies input (web page, ima
           ↓                ↓                ↓
     Direct LLM Query  Vision Analysis  Intelligence Pipeline
      (~1-2 seconds)   (~2-3 seconds)    (~5-20 seconds)
+                                             ↓
+                                    ┌────────────────┐
+                                    │ Guardian Score │
+                                    │ Contract       │
+                                    │ Analysis       │
+                                    └────────────────┘
+                                             ↑
+                                    [Ideal Templates]
+                                    Auto-processed on startup
 ```
 
 ### 1. 📋 **Input Classification & Smart Routing**
@@ -396,3 +405,124 @@ final_answers = await asyncio.gather(*synthesis_tasks)
 
 
 **Timeout and Fallback**: Each synthesis call has timeout protection. If the primary model fails, the system automatically retries with a backup model (e.g., Gemini Flash), ensuring a response is always generated.
+
+## 7. 🏆 **Guardian Score & Ideal Contract Templates**
+
+The system includes an advanced contract analysis feature called **Guardian Score** that provides intelligent evaluation of legal documents by comparing them against ideal contract templates. This specialized module extends beyond general document Q&A to provide structured contract analysis and scoring.
+
+### **Automatic Template Processing on Startup**
+
+The system implements a sophisticated startup routine that automatically processes ideal contract templates, ensuring the Guardian Score system is always ready with the latest template data.
+
+**Startup Detection**: Every time the FastAPI server starts, the system automatically scans the `ideal_contract_templates` folder in the project root. This ensures that any new templates added to the folder are immediately available for contract analysis.
+
+**Smart Processing Logic**: The system implements intelligent duplicate detection to avoid reprocessing templates unnecessarily:
+
+```python
+# Check existing templates by source file
+existing_templates = ideal_manager.list_ideal_contracts()
+existing_files = {template.get('source_file') for template in existing_templates 
+                 if template.get('source_file')}
+
+# Only process files not already in the system
+for pdf_file in pdf_files:
+    if pdf_file not in existing_files:
+        # Process new template
+        process_template(pdf_file)
+```
+
+**Template Naming Convention**: The system expects templates to follow a specific naming pattern: `{category}_{description}.pdf`. For example:
+- `rental_mumbai_housing.pdf` - A rental agreement template for Mumbai housing
+- `employment_standard_agreement.pdf` - A standard employment contract template
+- `nda_mutual_template.pdf` - A mutual non-disclosure agreement template
+
+**Automatic Categorization**: The system extracts the category from the filename (the part before the first underscore) and validates it against supported contract categories. Invalid categories are skipped with appropriate logging.
+
+### **Template Processing Pipeline**
+
+The template processing follows a sophisticated pipeline that mirrors the main document processing system but with contract-specific optimizations:
+
+**Document Extraction**: Each PDF template is processed using the same document processing pipeline as regular documents, extracting text with page number attribution and handling various PDF formats robustly.
+
+**Embedding Generation**: The full text of each template is converted to vector embeddings using the same optimized embedding manager. These embeddings enable semantic similarity comparison between user contracts and ideal templates.
+
+**Metadata Generation**: The system automatically generates comprehensive metadata for each template:
+
+```python
+template_data = {
+    "category": category_enum,
+    "title": f"{category_name.title()} Template - {description}",
+    "description": f"Legal template for {category_name} contracts - {description}",
+    "essential_clauses": [
+        {
+            "name": "standard_clauses",
+            "description": f"Standard clauses found in {category_name} contracts",
+            "importance": 10,
+            "keywords": [category_name, "contract", "agreement", "terms"],
+            "required": True
+        }
+    ],
+    "risk_factors": [
+        {
+            "name": "missing_protections",
+            "description": f"Important {category_name} protections missing from user contract",
+            "risk_level": "high",
+            "keywords": ["missing", "protection", "rights"],
+            "penalty_score": -25
+        }
+    ],
+    "compliance_requirements": [
+        {
+            "name": "legal_standards",
+            "description": f"Must meet legal standards for {category_name} contracts",
+            "required": True,
+            "keywords": ["legal", "compliance", "standard"]
+        }
+    ],
+    "scoring_weights": {
+        "essential_clauses": 0.6,
+        "risk_factors": 0.3,
+        "compliance": 0.1
+    }
+}
+```
+
+**ChromaDB Storage**: Templates are stored in a specialized ChromaDB collection with rich metadata, enabling fast similarity searches and category-based filtering during Guardian Score analysis.
+
+### **Guardian Score Analysis System**
+
+When a user requests contract analysis, the Guardian Score system performs intelligent template matching and scoring:
+
+**Category Detection**: The system analyzes the user's contract to determine its category, then retrieves only relevant ideal templates for comparison.
+
+**Semantic Similarity**: Using the vector embeddings, the system calculates semantic similarity between the user contract and ideal templates, identifying the closest matches.
+
+**Clause Analysis**: The system performs detailed analysis of essential clauses, risk factors, and compliance requirements, generating specific scores and recommendations.
+
+**Weighted Scoring**: The final Guardian Score is calculated using configurable weights that balance different aspects of contract quality:
+- Essential clauses (60%) - Coverage of standard contractual protections
+- Risk factors (30%) - Identification and mitigation of potential risks  
+- Compliance requirements (10%) - Adherence to legal standards
+
+### **Startup Performance Optimization**
+
+The template processing system is designed for minimal startup impact:
+
+**Concurrent Processing**: Template processing happens concurrently with other startup tasks, ensuring the server becomes available quickly.
+
+**Error Resilience**: Individual template processing failures don't prevent server startup. Errors are logged but don't block the system.
+
+**Progress Monitoring**: The system provides clear console output showing processing progress, including success and skip counts:
+
+```
+📁 Processing 3 ideal contract templates on startup...
+📄 Processing: rental_mumbai_housing.pdf
+✅ Processed: rental_mumbai_housing.pdf -> template_12345
+📄 Processing: employment_standard_agreement.pdf  
+✅ Processed: employment_standard_agreement.pdf -> template_12346
+✅ Successfully processed 2 ideal contract templates on startup
+```
+
+**Graceful Degradation**: If the templates folder doesn't exist or contains no valid templates, the system continues startup normally. Guardian Score functionality simply uses fallback scoring mechanisms.
+
+This automatic template processing ensures that the Guardian Score system is always up-to-date with the latest ideal contracts, providing accurate and relevant contract analysis without requiring manual intervention from system administrators.

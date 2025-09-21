@@ -507,21 +507,21 @@ What would you like to explore first?`,
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.slice(6))
-                  
+
                   if (data.chunk) {
                     // Update the streaming message with new content
-                    setMessages((prev) => 
-                      prev.map(msg => 
-                        msg.id === aiResponse.id 
+                    setMessages((prev) =>
+                      prev.map(msg =>
+                        msg.id === aiResponse.id
                           ? { ...msg, content: msg.content + data.chunk }
                           : msg
                       )
                     )
                   } else if (data.done) {
                     // Mark streaming as complete
-                    setMessages((prev) => 
-                      prev.map(msg => 
-                        msg.id === aiResponse.id 
+                    setMessages((prev) =>
+                      prev.map(msg =>
+                        msg.id === aiResponse.id
                           ? { ...msg, isStreaming: false }
                           : msg
                       )

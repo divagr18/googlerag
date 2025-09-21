@@ -36,8 +36,9 @@ ANSWER_SEMAPHORE = asyncio.Semaphore(20)
 
 
 try:
-    reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-12-v2")
-    print("✅ Reranker model loaded successfully.")
+    # Force CPU usage for reranker to avoid GPU dependency
+    reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-12-v2", device="cpu")
+    print("✅ Reranker model loaded successfully on CPU.")
 except Exception as e:
     print(f"⚠️ Could not load reranker model: {e}. Reranking will be disabled.")
     reranker = None

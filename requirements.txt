@@ -5,10 +5,8 @@ faiss-cpu
 fastapi==0.116.1
 PyMuPDF
 groq==0.31.0
-hashlib
 httpx==0.28.1
 google-genai
-google
 langdetect==1.0.9
 rank_bm25
 nltk==3.8.1

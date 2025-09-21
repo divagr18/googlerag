@@ -26,6 +26,13 @@ This is a readme that focuses on giving an overview of the project. For a more c
 - **Raw text/HTML** fetching from URLs
 - **Smart semantic chunking** with overlap for context preservation
 
+### Guardian Score & Contract Analysis
+- **Automated Contract Scoring**: Intelligent analysis of legal documents using ideal contract templates
+- **Template-Based Comparison**: Compare user contracts against ideal templates for comprehensive scoring
+- **Auto-Processing Templates**: Automatically processes ideal contract templates on startup from the `ideal_contract_templates` folder
+- **Smart Template Management**: Only processes new or modified templates to avoid duplicates
+- **Multi-Category Support**: Supports rental, employment, NDA, and other contract categories
+
 ### Intelligent Triage Modes
 - **Direct Mode**: Small documents (<2000 tokens) processed via Agno agent for ultra-low latency
 - **RAG Pipeline**: Large documents with hybrid retrieval and reranking
@@ -72,17 +79,21 @@ This is a readme that focuses on giving an overview of the project. For a more c
 ```
 api/
 ├── core/
-│   ├── agent_logic.py          # Main orchestration logic
-│   ├── agno_direct_agent.py    # Direct processing for small docs
-│   ├── document_processor.py   # Document parsing and chunking
-│   ├── embedding_manager.py    # GPU-optimized embeddings
-│   ├── vector_store.py         # Hybrid search implementation
-│   └── query_expander.py       # Query enhancement and expansion
+│   ├── agent_logic.py             # Main orchestration logic
+│   ├── agno_direct_agent.py       # Direct processing for small docs
+│   ├── document_processor.py      # Document parsing and chunking
+│   ├── embedding_manager.py       # GPU-optimized embeddings
+│   ├── vector_store.py            # Hybrid search implementation
+│   ├── query_expander.py          # Query enhancement and expansion
+│   └── ideal_contract_manager.py  # Guardian Score contract analysis
 ├── routes/
-│   └── ragsys.py               # API endpoints
-├── main.py                     # FastAPI application
-├── state.py                    # Global state management
-└── settings.py                 # Configuration
+│   └── ragsys.py                  # API endpoints including contract scoring
+├── main.py                        # FastAPI application with auto template processing
+├── state.py                       # Global state management
+└── settings.py                    # Configuration
+ideal_contract_templates/          # Auto-processed contract templates
+├── rental_mumbai_housing.pdf      # Example template files
+└── README.md                      # Template instructions
 ```
 
 
@@ -140,15 +151,64 @@ Create a `.env` based on the .env.sample file:
 GOOGLE_API_KEY=your_google_gemini_api_key
 ```
 
+### Ideal Contract Templates Setup
+To enable Guardian Score contract analysis:
+1. Create or use the existing `ideal_contract_templates` folder in the project root
+2. Add PDF contract templates following the naming convention: `{category}_{description}.pdf`
+3. Supported categories: `rental`, `employment`, `nda`, etc.
+4. Templates are automatically processed on server startup
+5. Only new or modified templates are processed to avoid duplicates
+
+Example template files:
+- `rental_mumbai_housing.pdf`
+- `employment_standard_agreement.pdf`
+- `nda_mutual_template.pdf`
+
 ### Docker (Recommended)
 
 Ensure have cloned the MAIN branch
+
+**GPU Version (Recommended for best performance):**
 ```dockerfile
 docker compose up --build -d
 ```
 
+**CPU-Only Version (No GPU required):**
+```dockerfile
+docker compose -f docker-compose-cpu.yml up --build -d
+```
+
+Both versions will start:
+- **Backend API**: Available at http://localhost:8000
+- **Frontend UI**: Available at http://localhost:3000
+
+The frontend automatically connects to the backend API for document processing and Guardian Score analysis.
+
+**Key Differences:**
+- **GPU Version**: Uses local SentenceTransformers for embeddings + GPU-accelerated reranking
+- **CPU Version**: Uses Gemini API for embeddings + CPU-based reranking (requires GOOGLE_API_KEY)
+
 ### Production Considerations
 - **GPU Memory**: Monitor VRAM usage for concurrent requests
+
+### Deployment Options
+
+#### GPU Version (Default)
+- **Best Performance**: Local SentenceTransformers embeddings with GPU acceleration
+- **Requirements**: NVIDIA GPU with CUDA support, sufficient VRAM
+- **Use Case**: High-throughput production environments
+- **Cost**: Higher hardware requirements, lower API costs
+
+#### CPU-Only Version
+- **Universal Compatibility**: Runs on any system without GPU requirements
+- **Requirements**: Only GOOGLE_API_KEY for Gemini embeddings
+- **Use Case**: Development, testing, or systems without GPU access
+- **Cost**: Lower hardware requirements, higher API costs for embeddings
+
+**Performance Comparison:**
+- **Embeddings**: GPU (faster, local) vs CPU (API-based, rate limited)
+- **Reranking**: GPU (batched, very fast) vs CPU (sequential, moderate speed)
+- **Overall**: GPU version ~2-3x faster for large document processing
 
 
 
@@ -172,6 +232,34 @@ The system employs a **multi-tier architecture** optimized for latency based on 
     Direct LLM Query  Vision Analysis  Intelligence Pipeline
      (~1-2 seconds)   (~2-3 seconds)    (~5-20 seconds)
 ```
+
+## 🏆 Guardian Score & Ideal Contract Templates
+
+The system includes an advanced contract analysis feature called **Guardian Score** that automatically evaluates legal documents against ideal contract templates.
+
+### Automatic Template Processing
+- **Startup Processing**: Every time the FastAPI server starts, it automatically scans the `ideal_contract_templates` folder
+- **Smart Detection**: Only processes new or modified templates to avoid duplicates
+- **Multi-Category Support**: Supports multiple contract categories (rental, employment, NDA, etc.)
+- **Filename Convention**: Templates should follow the format `{category}_{description}.pdf`
+
+### Template Management Features
+- **Automatic Classification**: Templates are classified based on filename patterns
+- **Embedding Generation**: Each template is converted to vector embeddings for similarity comparison
+- **Metadata Extraction**: Automatically extracts essential clauses, risk factors, and compliance requirements
+- **Version Control**: Tracks when templates were processed to avoid reprocessing
+
+### How to Add Templates
+1. Place PDF files in the `ideal_contract_templates` folder
+2. Follow the naming convention: `rental_mumbai_housing.pdf`, `employment_standard_agreement.pdf`
+3. Restart the server or call the manual processing endpoint
+4. Templates are automatically processed and made available for Guardian Score analysis
+
+### Guardian Score Analysis
+- **Comparative Analysis**: User contracts are compared against relevant ideal templates
+- **Scoring Algorithm**: Weighted scoring based on essential clauses, risk factors, and compliance
+- **Detailed Feedback**: Provides specific recommendations and identifies missing protections
+- **Category-Specific**: Uses appropriate templates based on contract category detection
 
 ## 📋 Input Classification & Smart Routing
 
@@ -245,11 +333,47 @@ Feel free to run the ruff scripts in scripts/ to lint and format the code if you
 
 ##  Usage
 
-### Start the API Server
+### Start with Docker (Recommended)
 
-If not using Docker, run:
+**GPU Version:**
 ```bash
+# Start both frontend and backend services with GPU acceleration
+docker compose up --build -d
+```
+
+**CPU-Only Version:**
+```bash
+# Start both frontend and backend services (CPU-only, requires GOOGLE_API_KEY)
+docker compose -f docker-compose-cpu.yml up --build -d
+```
+
+**Access the application:**
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+
+### Start Manually (Development)
+
+If not using Docker, run both services separately:
+
+**Backend (GPU Version):**
+```bash
+# From project root
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Backend (CPU-Only Version):**
+```bash
+# From project root - requires GOOGLE_API_KEY in .env
+uvicorn api.main_cpu:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Frontend:**
+```bash
+# From frontend directory
+cd frontend
+npm install
+npm run dev
 ```
 
 ## Use Cases
@@ -258,6 +382,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 - Constitutional articles analysis
 - Contract clause extraction
 - Legal precedent search
+- **Guardian Score Contract Analysis**: Automated scoring of rental agreements, employment contracts, NDAs
 
 ### Insurance Policies
 - Coverage details and exclusions
@@ -273,6 +398,12 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 - Key findings extraction
 - Methodology analysis
 - Citation tracking
+
+### Contract Management
+- **Automated Contract Scoring**: Compare user contracts against ideal templates
+- **Risk Assessment**: Identify missing protections and compliance issues
+- **Template-Based Analysis**: Leverage ideal contract templates for comprehensive evaluation
+- **Multi-Category Support**: Handle different contract types with specialized templates
 
 
 ## Future Roadmap
