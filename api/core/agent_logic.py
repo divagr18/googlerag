@@ -5,7 +5,6 @@ import os
 import asyncio
 import time
 from typing import List, Dict, Tuple
-from openai import AsyncOpenAI
 from .vector_store import RequestKnowledgeBase
 from .citation_utils import CitationManager
 from dotenv import load_dotenv
@@ -14,12 +13,9 @@ from sentence_transformers.cross_encoder import CrossEncoder
 from google import genai
 from google.genai import types
 from collections import defaultdict
-from groq import AsyncGroq, Groq
 
 load_dotenv()
 
-# Initialize Groq async client
-groq_client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 # Setup logger
 agent_logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -27,7 +23,6 @@ logging.basicConfig(
 )
 
 # Initialize API clients
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 try:
     gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
     print("✅ Google Gemini Client initialized successfully.")
@@ -49,7 +44,7 @@ except Exception as e:
 
 
 async def answer_raw_text_query(raw_text: str, question: str) -> str:
-    """Directly query GPT-4.1-mini with raw text/HTML content, skipping chunking and embeddings."""
+    """Directly query Gemini 2.5 Flash with raw text/HTML content, skipping chunking and embeddings."""
     print(f"Executing direct raw text query for: {question[:50]}...")
     async with ANSWER_SEMAPHORE:
         try:
@@ -65,21 +60,27 @@ async def answer_raw_text_query(raw_text: str, question: str) -> str:
                 "Write everything as normal text without quotes."
             )
 
-            response = await client.chat.completions.create(
-                model="gpt-4.1-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-            )
-            return response.choices[0].message.content.strip()
+            response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash-lite",
+                    contents=[prompt],  # Pass prompt as a list
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        system_instruction="MUST RESPOND IN ENGLISH AT ALL COSTS.",
+                    ),
+                )
+            return response.text
 
         except Exception as e:
-            print(f"OpenAI raw text query failed: {e}")
+            print(f"Gemini raw text query failed: {e}")
             return "I was unable to analyze the document due to an internal error."
 
 
 async def answer_image_query(image_url: str, question: str) -> str:
     print(f"Executing direct vision query for: {question[:50]}...")
     async with ANSWER_SEMAPHORE:
+        if gemini_client is None:
+            return "Gemini client is not available."
+
         try:
             prompt = (
                 question
@@ -91,27 +92,108 @@ async def answer_image_query(image_url: str, question: str) -> str:
                 "Write everything as normal text without quotes."
             )
 
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                    ],
-                }
-            ]
+            # Handle base64 data URL format
+            if image_url.startswith('data:'):
+                # Extract base64 data and mime type
+                header, base64_data = image_url.split(',', 1)
+                mime_type = header.split(':')[1].split(';')[0]
+                
+                # Decode base64 to bytes
+                import base64
+                image_bytes = base64.b64decode(base64_data)
+                
+                # Create image part using bytes
+                image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+                
+                response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[prompt, image_part],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        system_instruction="Be very very detailed and thorough in your responses.",
+                    ),
+                )
+            else:
+                # Handle regular URL (if needed)
+                response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        system_instruction="Be very very detailed and thorough in your responses.",
+                    ),
+                )
 
-            response = await client.chat.completions.create(
-                model="gpt-4.1-mini",
-                messages=messages,
-                temperature=0.1,
-            )
-
-            return response.choices[0].message.content
+            return response.text.strip() if hasattr(response, "text") else str(response)
 
         except Exception as e:
-            agent_logger.error(f"OpenAI vision query failed: {e}", exc_info=True)
+            agent_logger.error(f"Gemini vision query failed: {e}", exc_info=True)
             return "I was unable to analyze the image due to an internal error."
+
+
+async def answer_image_query_streaming(image_url: str, question: str):
+    """
+    Streaming version of answer_image_query that yields text chunks as they arrive.
+    """
+    print(f"Executing streaming vision query for: {question[:50]}...")
+    async with ANSWER_SEMAPHORE:
+        if gemini_client is None:
+            yield "Gemini client is not available."
+            return
+
+        try:
+            prompt = (
+                question
+                + " Instructions: You must have a differently worded response every time, "
+                "same response just shuffle 1-2 words around. You might encounter incorrect information, "
+                "if so, return the incorrect information but mention that it is according to the document. "
+                "Be detailed and thorough in your responses. IMPORTANT: Reply in plain text only. "
+                "Do not use quotation marks around any words or terms. Do not use any formatting, markdown, or special characters. "
+                "Write everything as normal text without quotes."
+            )
+
+            # Handle base64 data URL format
+            if image_url.startswith('data:'):
+                # Extract base64 data and mime type
+                header, base64_data = image_url.split(',', 1)
+                mime_type = header.split(':')[1].split(';')[0]
+                
+                # Decode base64 to bytes
+                import base64
+                image_bytes = base64.b64decode(base64_data)
+                
+                # Create image part using bytes
+                image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+                
+                # Use streaming generate_content
+                stream = gemini_client.aio.models.generate_content_stream(
+                    model="gemini-2.5-flash",
+                    contents=[prompt, image_part],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        system_instruction="Be very very detailed and thorough in your responses.",
+                    ),
+                )
+                
+                async for chunk in stream:
+                    if hasattr(chunk, 'text') and chunk.text:
+                        yield chunk.text
+            else:
+                # Handle regular URL (if needed) - fallback to non-streaming
+                response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        system_instruction="Be very very detailed and thorough in your responses.",
+                    ),
+                )
+                if hasattr(response, 'text'):
+                    yield response.text
+
+        except Exception as e:
+            agent_logger.error(f"Gemini streaming vision query failed: {e}", exc_info=True)
+            yield "I was unable to analyze the image due to an internal error."
 
 
 # The answer_image_query function
@@ -196,35 +278,42 @@ Now, analyze the following user question and provide the corresponding JSON outp
     async with QUERY_STRATEGY_SEMAPHORE:
         try:
             t0 = time.perf_counter()
-            completion_task = client.chat.completions.create(
-                model="gpt-4.1-nano",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": 'You are a reasoning agent that decomposes questions into searchable sub-questions. Respond only with a valid JSON object like {"sub_questions": ["query1", ...]}. ',
-                    },
-                    {"role": "user", "content": strategy_prompt},
-                ],
-                temperature=0.2,  # Low temperature for deterministic, logical output
-                response_format={"type": "json_object"},
-            )
-            completion = await asyncio.wait_for(completion_task, timeout=6.0)
-            strategy_data = json.loads(completion.choices[0].message.content)
 
-            # Validate the output format
-            if "sub_questions" not in strategy_data or not isinstance(
-                strategy_data["sub_questions"], list
-            ):
+            async def run_gemini():
+                return gemini_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[
+                        {
+                            "role": "system",
+                            "parts": [
+                                {
+                                    "text": 'You are a reasoning agent that decomposes questions into searchable sub-questions. Respond only with a valid JSON object like {"sub_questions": ["query1", ...]}.'
+                                }
+                            ],
+                        },
+                        {"role": "user", "parts": [{"text": strategy_prompt}]},
+                    ],
+                    generation_config={"temperature": 0.2, "response_mime_type": "application/json"},
+                )
+
+            # Run Gemini call in a thread to avoid blocking event loop
+            response = await asyncio.wait_for(asyncio.to_thread(run_gemini), timeout=6.0)
+
+            # Gemini returns text output
+            strategy_data = json.loads(response.text)
+
+            # Validate format
+            if "sub_questions" not in strategy_data or not isinstance(strategy_data["sub_questions"], list):
                 raise ValueError("LLM response missing 'sub_questions' list.")
 
             return strategy_data, time.perf_counter() - t0
+
         except asyncio.TimeoutError:
             agent_logger.warning(
                 f"Query decomposition timed out for '{original_query[:30]}...'. Falling back."
             )
             return {"sub_questions": [original_query]}, 0.0
         except Exception as e:
-            # If decomposition fails, fall back to using the original question as a single sub-question.
             agent_logger.error(
                 f"Query decomposition failed for '{original_query[:30]}...': {e}. Falling back.",
                 exc_info=True,
@@ -308,16 +397,16 @@ MUST RESPOND IN ENGLISH AT ALL COSTS.
                 return response.text
 
             else:
-                response_text = await client.chat.completions.create(
-                    model="gpt-4.1-mini",
-                    messages=[{"role": "user", "content": synthesis_prompt}],
-                    temperature=0.1,
+                response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[synthesis_prompt],  # Pass prompt as a list
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        system_instruction="MUST RESPOND IN ENGLISH AT ALL COSTS.",
+                    ),
                 )
-                return response_text.choices[0].message.content
+                return response.text
         except Exception as e:
-            agent_logger.warning(
-                f"Gemini synthesis failed: {e}. Falling back to OpenAI."
-            )
             response = await gemini_client.aio.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=[synthesis_prompt],  # Pass prompt as a list
@@ -372,16 +461,17 @@ MUST RESPOND IN ENGLISH AT ALL COSTS.
                 return response.text
 
             else:
-                response_text = await client.chat.completions.create(
-                    model="gpt-4.1-mini",
-                    messages=[{"role": "user", "content": synthesis_prompt}],
-                    temperature=0.1,
+                response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[synthesis_prompt],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        system_instruction="MUST RESPOND IN ENGLISH AT ALL COSTS. MUST NOT MAKE ANY ASSUMPTIONS OR INFERENCES FROM THE DATA, JUST ANSWER DIRECTLY BASED ON THE DATA PROVIDED.",
+                    ),
                 )
-                return response_text.choices[0].message.content
+                return response.text
         except Exception as e:
-            agent_logger.warning(
-                f"Gemini synthesis failed: {e}. Falling back to OpenAI."
-            )
+
             response = await gemini_client.aio.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=[synthesis_prompt],

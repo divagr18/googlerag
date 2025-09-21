@@ -60,14 +60,14 @@ The system employs four distinct processing modes, each optimized for different 
 
 #### **Mode A: Raw Text/HTML Processing** (~1-2 seconds)
 
-This is the fastest mode, designed for web pages, API documentation, or plain text content. When the system detects a URL without a file extension or with HTML indicators, it immediately fetches the content using HTTP requests and sends it directly to Groq's Llama model.
+This is the fastest mode, designed for web pages, API documentation, or plain text content. When the system detects a URL without a file extension or with HTML indicators, it immediately fetches the content using HTTP requests.
 
 The magic here is avoiding any preprocessing - no chunking, no embedding generation, no vector searches. The raw HTML or text content is combined with each question and sent directly to the LLM. This works because modern LLMs can handle substantial context windows, and simple web content doesn't require sophisticated retrieval strategies.
 
 ```
 URL → HTTP Fetch → Direct LLM Query
                       ↓
-                 Groq Llama 8B
+                 Gemini 2.5 Flash Lite
                  (Ultra-fast inference)
 ```
 
@@ -77,12 +77,12 @@ URL → HTTP Fetch → Direct LLM Query
 
 For image inputs, the system recognizes that traditional text processing is irrelevant. Instead of trying to OCR the image and then process the text, it leverages multimodal vision models that can directly understand visual content.
 
-The system passes the image URL directly to Groq's Llama-4-Scout-17B vision model. This model can analyze charts, diagrams, scanned documents, and any visual content without needing intermediate text extraction. The latency is slightly higher than raw text because vision models are computationally more complex, but it's still much faster than OCR followed by text processing.
+The system passes the image URL directly to Gemini's 2.5 Flash multimodal vision model. This model can analyze charts, diagrams, scanned documents, and any visual content without needing intermediate text extraction. The latency is slightly higher than raw text because vision models are computationally more complex, but it's still much faster than OCR followed by text processing.
 
 ```
-Image URL → Groq Vision Model → Direct Analysis
+Image URL → Gemini Vision Model → Direct Analysis
               ↓
-         Llama-4-Scout-17B
+         Gemini's 2.5 Flash
          (Multimodal vision)
 ```
 
@@ -102,7 +102,7 @@ Small Doc → Token Count Check → Agno Agent → Direct LLM
 
 **Token Counting Logic**: The system uses OpenAI's `tiktoken` library to count tokens accurately. If that fails, it falls back to a character-based approximation (4 characters per token). This ensures documents that can fit comfortably in modern LLM context windows are processed directly.
 
-**Agno Agent Architecture**: The Agno agent uses Groq's GPT-OSS-20B model for speed while maintaining good quality. It processes each question by combining the full document context with specific instructions, ensuring comprehensive answers without the overhead of retrieval systems.
+**Agno Agent Architecture**: The Agno agent uses Gemini's 2.5 flash model for speed while maintaining good quality. It processes each question by combining the full document context with specific instructions, ensuring comprehensive answers without the overhead of retrieval systems.
 
 #### **Mode D: Full RAG Intelligence Pipeline** (~5-45 seconds)
 
@@ -128,7 +128,7 @@ KB Index Building ──┘                    └──── Strategy Cache
 
 **Document Processing Flow**: The system first streams the document using high-speed downloaders like `aria2c`, falling back to `aiohttp` if needed. As chunks of the document arrive, format-specific parsers extract text (PyMuPDF for PDFs, python-docx for Word documents, etc.). This streaming approach means processing begins before the entire document is downloaded.
 
-**Concurrent Query Analysis**: Simultaneously, each user question is sent to GPT-4.1-nano for decomposition analysis. The system asks: "What individual pieces of information are needed to answer this question?" Complex questions like "I renewed my policy yesterday and have been a customer for 6 years. Can I raise a claim for Hydrocele?" get broken down into factual sub-questions about waiting periods and continuous coverage benefits.
+**Concurrent Query Analysis**: Simultaneously, each user question is sent to Gemini 2.5 flash lite for decomposition analysis. The system asks: "What individual pieces of information are needed to answer this question?" Complex questions like "I renewed my policy yesterday and have been a customer for 6 years. Can I raise a claim for Hydrocele?" get broken down into factual sub-questions about waiting periods and continuous coverage benefits.
 
 This concurrent approach typically saves 3-5 seconds compared to sequential processing, which is crucial for user experience. This has a HARD CAP of 6s to ensure any API call doesn't get stuck and cause an increase in latency.  
 
@@ -209,7 +209,7 @@ Query decomposition is one of the system's most sophisticated features, designed
 
 #### **Intelligent Query Analysis**
 
-The decomposition process uses GPT-4.1-nano in a structured reasoning framework. For each question, the system asks the LLM to:
+The decomposition process uses gemini-2.5-flash-lite in a structured reasoning framework. For each question, the system asks the LLM to:
 
 1. **Identify Core Intent**: What is the user fundamentally asking for?
 2. **Identify Necessary Facts**: What individual pieces of information are required?
@@ -354,7 +354,7 @@ The final synthesis phase demonstrates the system's adaptive intelligence. Rathe
 
 The system makes intelligent decisions about how much context to provide to the LLM based on the number of questions being processed:
 
-**High-K Mode (≤18 questions)**: When processing fewer questions, the system can afford to be more thorough. It selects the top 12 reranked chunks per question and uses GPT-4.1-mini for synthesis. This provides maximum accuracy but takes longer per question.
+**High-K Mode (≤18 questions)**: When processing fewer questions, the system can afford to be more thorough. It selects the top 12 reranked chunks per question and uses gemini-2.5-flash for synthesis. This provides maximum accuracy but takes longer per question.
 
 **Fast Mode (>18 questions)**: For large batches, the system prioritizes speed. It reduces context to the top 8 chunks and switches to Gemini-2.5-flash-lite, which has faster inference times. This maintains good quality while dramatically improving throughput.
 
@@ -362,7 +362,7 @@ The system makes intelligent decisions about how much context to provide to the 
 # Dynamic chunk selection based on question count
 if use_high_k:  # ≤18 questions
     final_chunks = reranked_chunks[:12]    # More context
-    model = "gpt-4.1-mini"                 # Higher accuracy
+    model = "gemini-2.5-flash"                 # Higher accuracy
 else:           # >18 questions  
     final_chunks = reranked_chunks[:8]     # Less context
     model = "gemini-2.5-flash-lite"       # Faster inference
@@ -394,9 +394,5 @@ synthesis_tasks = [
 final_answers = await asyncio.gather(*synthesis_tasks)
 ```
 
-**Model Selection Strategy**: The system uses different models based on context and requirements:
-- **Gemini 2.5 Flash Lite**: For speed (large batches, non-English)
-- **GPT-4.1 Mini**: For accuracy (small batches, complex questions)
-- **Groq Llama**: For ultra-fast processing (direct modes)
 
 **Timeout and Fallback**: Each synthesis call has timeout protection. If the primary model fails, the system automatically retries with a backup model (e.g., Gemini Flash), ensuring a response is always generated.

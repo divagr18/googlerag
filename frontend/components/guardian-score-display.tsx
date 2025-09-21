@@ -182,7 +182,7 @@ export function GuardianScoreDisplay({ document }: GuardianScoreDisplayProps) {
                                                 {/* AI Recommendation */}
                                                 {flag.ai_recommendation && (
                                                     <div>
-                                                        <h5 className="text-sm font-medium text-white mb-1">🤖 AI Recommendation:</h5>
+                                                        <h5 className="text-sm font-medium text-white mb-1">🤖 Guardian's Recommendation:</h5>
                                                         <div className="bg-blue-900/20 border border-blue-500/30 rounded p-3">
                                                             <p className="text-sm text-blue-300">{flag.ai_recommendation}</p>
                                                         </div>

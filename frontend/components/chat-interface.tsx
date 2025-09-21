@@ -8,7 +8,7 @@ import { Card } from "./ui/card"
 import { Input } from "./ui/input"
 import { Avatar, AvatarFallback } from "./ui/avatar"
 import { Progress } from "./ui/progress"
-import { ArrowLeft, Upload, Send, FileText, ChevronDown, ChevronUp } from "lucide-react"
+import { ArrowLeft, Upload, Send, FileText, ChevronDown, ChevronUp, Image, X } from "lucide-react"
 import type { Document } from "../app/page"
 import { ApiClient } from "../lib/api"
 
@@ -29,6 +29,10 @@ interface Message {
   content: string
   isStreaming?: boolean
   citations?: Citation[]
+  image?: {
+    file: File
+    preview: string
+  }
 }
 
 interface Citation {
@@ -56,7 +60,9 @@ What would you like to explore first?`,
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [isThinking, setIsThinking] = useState(false)
   const [issuesExpanded, setIssuesExpanded] = useState(false)
+  const [uploadedImage, setUploadedImage] = useState<{ file: File, preview: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
 
   function getScoreText(score: number) {
     if (score >= 80) return "Low Risk"
@@ -67,7 +73,7 @@ What would you like to explore first?`,
   // Thinking animation component
   const ThinkingAnimation = () => (
     <div className="flex items-center space-x-1 text-zinc-500">
-      <span>AI is thinking</span>
+      <span>Guardian is thinking</span>
       <div className="flex space-x-1">
         <div className="w-1 h-1 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
         <div className="w-1 h-1 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
@@ -431,8 +437,123 @@ What would you like to explore first?`,
   }
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isThinking) return
+    if ((!inputValue.trim() && !uploadedImage) || isThinking) return
 
+    // Handle image upload with question
+    if (uploadedImage) {
+      const newMessage: Message = {
+        id: Date.now().toString(),
+        type: "user",
+        content: inputValue || "Analyze this image",
+        image: uploadedImage,
+      }
+
+      setMessages((prev) => [...prev, newMessage])
+      const currentQuestion = inputValue || "What do you see in this image?"
+      setInputValue("")
+      setUploadedImage(null)
+      setIsThinking(true)
+
+      // Add thinking message
+      const thinkingMessage: Message = {
+        id: `thinking_${Date.now()}`,
+        type: "thinking",
+        content: "",
+      }
+      setMessages((prev) => [...prev, thinkingMessage])
+
+      try {
+        // Call streaming image analysis API
+        const formData = new FormData()
+        formData.append('image', uploadedImage.file)
+        formData.append('question', currentQuestion)
+
+        const response = await fetch('http://localhost:8000/v1/ragsys/analyze-image', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!response.ok) {
+          throw new Error('Failed to analyze image')
+        }
+
+        // Remove thinking message and add streaming response
+        setMessages((prev) => prev.filter(msg => msg.type !== "thinking"))
+
+        const aiResponse: Message = {
+          id: Date.now().toString(),
+          type: "ai",
+          content: "",
+          isStreaming: true,
+        }
+
+        setMessages((prev) => [...prev, aiResponse])
+
+        // Handle streaming response
+        const reader = response.body?.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ""
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6))
+                  
+                  if (data.chunk) {
+                    // Update the streaming message with new content
+                    setMessages((prev) => 
+                      prev.map(msg => 
+                        msg.id === aiResponse.id 
+                          ? { ...msg, content: msg.content + data.chunk }
+                          : msg
+                      )
+                    )
+                  } else if (data.done) {
+                    // Mark streaming as complete
+                    setMessages((prev) => 
+                      prev.map(msg => 
+                        msg.id === aiResponse.id 
+                          ? { ...msg, isStreaming: false }
+                          : msg
+                      )
+                    )
+                    console.log(`✅ Image analysis completed in ${data.processing_time?.toFixed(2)}s`)
+                  } else if (data.error) {
+                    throw new Error(data.error)
+                  }
+                } catch (parseError) {
+                  console.warn('Failed to parse streaming data:', parseError)
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error analyzing image:', error)
+        setMessages((prev) => prev.filter(msg => msg.type !== "thinking"))
+
+        const errorResponse: Message = {
+          id: Date.now().toString(),
+          type: "ai",
+          content: "Sorry, I couldn't analyze the image. Please try again.",
+        }
+        setMessages((prev) => [...prev, errorResponse])
+      } finally {
+        setIsThinking(false)
+      }
+      return
+    }
+
+    // Regular text message handling
     const newMessage: Message = {
       id: Date.now().toString(),
       type: "user",
@@ -578,6 +699,38 @@ What would you like to explore first?`,
     }
   }
 
+  const handleImageUpload = () => {
+    imageInputRef.current?.click()
+  }
+
+  const handleImageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && file.type.startsWith('image/')) {
+      // Validate file size (10MB limit)
+      if (file.size > 10 * 1024 * 1024) {
+        alert('Image file too large. Maximum size is 10MB.')
+        return
+      }
+
+      const preview = URL.createObjectURL(file)
+      setUploadedImage({ file, preview })
+    } else {
+      alert('Please select a valid image file.')
+    }
+
+    // Reset input
+    if (e.target) {
+      e.target.value = ''
+    }
+  }
+
+  const removeUploadedImage = () => {
+    if (uploadedImage) {
+      URL.revokeObjectURL(uploadedImage.preview)
+      setUploadedImage(null)
+    }
+  }
+
   // Generate analysis data from document
   const getAnalysisData = () => {
     if (!document.is_contract || !document.exploitation_flags) {
@@ -623,6 +776,14 @@ What would you like to explore first?`,
         accept=".pdf,.doc,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
         multiple
         onChange={handleFileInputChange}
+        className="hidden"
+      />
+
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleImageInputChange}
         className="hidden"
       />
 
@@ -710,6 +871,17 @@ What would you like to explore first?`,
                     <ThinkingAnimation />
                   ) : (
                     <div className="prose prose-invert prose-sm max-w-none">
+                      {/* Display image if present */}
+                      {message.image && (
+                        <div className="mb-3">
+                          <img
+                            src={message.image.preview}
+                            alt="Uploaded image"
+                            className="max-w-xs max-h-48 rounded border border-zinc-600 object-cover"
+                          />
+                        </div>
+                      )}
+
                       {message.content.split("\n").map((line, i) => (
                         <p key={i} className="mb-1 last:mb-0 text-sm">
                           {renderLineWithFormattingAndCitations(line, message.citations || [])}
@@ -752,11 +924,36 @@ What would you like to explore first?`,
 
         {/* Chat Input */}
         <div className="border-t border-zinc-800 p-4">
+          {/* Image Preview */}
+          {uploadedImage && (
+            <div className="mb-3 relative inline-block">
+              <img
+                src={uploadedImage.preview}
+                alt="Image to analyze"
+                className="max-w-xs max-h-32 rounded border border-zinc-600 object-cover"
+              />
+              <button
+                onClick={removeUploadedImage}
+                className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 text-xs"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
           <div className="flex gap-2">
+            <Button
+              onClick={handleImageUpload}
+              className="bg-zinc-700 hover:bg-zinc-600 text-white h-8 px-3"
+              disabled={isThinking}
+              title="Upload image"
+            >
+              <Image className="w-3 h-3" />
+            </Button>
             <Input
               value={inputValue}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
-              placeholder="Type your question here..."
+              placeholder={uploadedImage ? "Ask a question about the image..." : "Type your question here..."}
               className="flex-1 bg-transparent border-none text-sm focus:outline-none text-white placeholder-zinc-500"
               onKeyPress={(e: React.KeyboardEvent) => e.key === "Enter" && !isThinking && handleSendMessage()}
               disabled={isThinking}
@@ -764,7 +961,7 @@ What would you like to explore first?`,
             <Button
               onClick={handleSendMessage}
               className="bg-white hover:bg-zinc-200 text-black h-8 px-3"
-              disabled={isThinking || !inputValue.trim()}
+              disabled={isThinking || (!inputValue.trim() && !uploadedImage)}
             >
               <Send className="w-3 h-3" />
             </Button>

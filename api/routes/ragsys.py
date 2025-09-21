@@ -1,7 +1,8 @@
 import os
 import asyncio
+import json
 from fastapi import APIRouter, HTTPException, Body, UploadFile, File, Form, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Tuple, Dict, Any
 import time
@@ -48,6 +49,7 @@ from api.core.agent_logic import (
     answer_raw_text_query,
     prepare_query_strategies_for_all_questions,
     answer_image_query,
+    answer_image_query_streaming,
     answer_questions_batch_orchestrator,
     synthesize_direct_answer,
 )
@@ -178,6 +180,16 @@ class IdealContractResponse(BaseModel):
 class ListIdealContractsResponse(BaseModel):
     templates: List[IdealContractResponse]
     total: int
+
+
+# --- Image Analysis Models ---
+class ImageAnalysisRequest(BaseModel):
+    question: str = Field(..., description="Question to ask about the image")
+
+
+class ImageAnalysisResponse(BaseModel):
+    answer: str
+    processing_time: float
 
 
 async def process_local_file(file_path: str) -> List[Tuple[str, int]]:
@@ -760,6 +772,90 @@ async def ask_questions(request: AskRequest = Body(...)):
     except Exception as e:
         print(f"❌ Error processing questions: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process questions: {str(e)}")
+
+
+# --- /analyze-image Endpoint ---
+@ragsys_router.post("/analyze-image")
+async def analyze_image(
+    image: UploadFile = File(..., description="Image file to analyze"),
+    question: str = Form(..., description="Question to ask about the image")
+):
+    """
+    Analyze an uploaded image and answer questions about it using the Gemini vision model.
+    Supports common image formats (JPEG, PNG, GIF, WebP).
+    Returns a streaming response.
+    """
+    try:
+        start_time = time.perf_counter()
+        
+        # Validate image file
+        if not image.content_type or not image.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="File must be an image")
+        
+        # Check file size (limit to 10MB)
+        MAX_SIZE = 10 * 1024 * 1024  # 10MB
+        image_content = await image.read()
+        if len(image_content) > MAX_SIZE:
+            raise HTTPException(status_code=400, detail="Image file too large. Maximum size is 10MB")
+        
+        print(f"🖼️ Analyzing image: {image.filename} ({len(image_content)} bytes)")
+        print(f"❓ Question: {question}")
+        
+        # Create a data URL for the image
+        import base64
+        
+        # Convert image to base64 data URL
+        base64_image = base64.b64encode(image_content).decode('utf-8')
+        
+        # Determine the MIME type for the data URL
+        mime_type = image.content_type
+        image_url = f"data:{mime_type};base64,{base64_image}"
+        
+        async def generate_response():
+            """Generator function for streaming response"""
+            full_answer = ""
+            try:
+                async for chunk in answer_image_query_streaming(image_url, question):
+                    if chunk:
+                        full_answer += chunk
+                        # Send chunk as JSON with proper formatting
+                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                
+                processing_time = time.perf_counter() - start_time
+                print(f"✅ Image analysis completed in {processing_time:.2f}s")
+                
+                # Log the Q&A
+                try:
+                    qa_logger.info(f"[IMAGE] {question} | A: {full_answer.replace(chr(10), ' ')}")
+                except Exception:
+                    pass
+                
+                # Send completion signal
+                yield f"data: {json.dumps({'done': True, 'processing_time': processing_time})}\n\n"
+                
+            except Exception as e:
+                print(f"❌ Error in streaming image analysis: {e}")
+                yield f"data: {json.dumps({'error': 'Failed to analyze image'})}\n\n"
+        
+        return StreamingResponse(
+            generate_response(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error analyzing image: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze image: {str(e)}")
+        raise
+    except Exception as e:
+        print(f"❌ Error analyzing image: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze image: {str(e)}")
 
 
 # --- /run Endpoint with restored RAG logic ---
@@ -1576,7 +1672,8 @@ async def process_folder_templates():
                     compliance_requirements=template_data["compliance_requirements"],
                     scoring_weights=template_data["scoring_weights"],
                     embedding=embedding,
-                    created_by="folder_processor"
+                    created_by="folder_processor",
+                    source_file=pdf_file
                 )
                 
                 processed_templates.append({

@@ -5,7 +5,7 @@ from agno.agent import Agent, RunResponse
 from agno.tools import tool
 import tiktoken
 import os
-from agno.models.groq import Groq
+from agno.models.google import Gemini
 
 
 async_client = httpx.AsyncClient(timeout=10.0)
@@ -72,8 +72,7 @@ def create_direct_processing_agent() -> Agent:
     Create an Agno agent for direct document processing with URL capabilities.
     """
     agent = Agent(
-        model=Groq(id="openai/gpt-oss-20b", api_key=os.getenv("GROQ_API_KEY")),
-        # model=Gemini(id="gemini-2.5-flash-lite",api_key=os.getenv("GOOGLE_API_KEY")),
+        model=Gemini(id="gemini-2.5-flash-lite", api_key=os.getenv("GOOGLE_API_KEY")),
         tools=[make_url_request],
         instructions="""
         You are a document analysis agent specialized in reading and answering questions about documents.

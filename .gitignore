@@ -52,3 +52,4 @@ yarn.lock
 Thumbs.db
 ehthumbs.db
 frontend/.next/
+chroma_db/

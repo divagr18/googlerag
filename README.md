@@ -39,8 +39,7 @@ This is a readme that focuses on giving an overview of the project. For a more c
 - **GPU-Accelerated Reranking**: CrossEncoder model for relevance scoring
 - **Domain Query Expansion**: Context-aware query enhancement
 
-### Multi-Language & Multi-Model Support
-- **LLM Models**: Google Gemini 2.5, OpenAI GPT-4.1, Groq Llama, Groq OpenAI OSS
+### Multi-Language Support
 - **Language Detection**: Automatic fallback for non-English content (<2000 tokens)
 - **Batch Processing**: Optimized for multiple questions simultaneously
 
@@ -48,7 +47,7 @@ This is a readme that focuses on giving an overview of the project. For a more c
 
 ### Core Technologies
 - **Backend**: FastAPI with async processing, asyncio for concurrency
-- **LLMs**: Google Gemini 2.5 Flash, OpenAI GPT-4.1, Groq Llama
+- **LLMs**: Google Gemini 2.5 Flash and 2.5 Flash Lite
 - **Search**: FAISS (vector similarity), BM25 (keyword matching)
 - **Embeddings**: SentenceTransformers Embedding Model (all-MiniLM-L12-v2)
 - **Reranking**: CrossEncoder Reranking Model (ms-marco-MiniLM-L-12-v2)
@@ -107,11 +106,6 @@ ANSWER_SEMAPHORE = 20
 SEARCH_SEMAPHORE = 40
 ```
 
-### Model Selection
-- **Small docs**: Groq Llama-3.1-8B (fast inference)
-- **Large docs**: Gemini 2.5 Flash (balanced)
-- **High accuracy**: GPT-4.1 Mini (premium)
-
 ## Performance Metrics
 
 ### Processing Speed
@@ -144,8 +138,6 @@ SEARCH_SEMAPHORE = 40
 Create a `.env` based on the .env.sample file:
 ```env
 GOOGLE_API_KEY=your_google_gemini_api_key
-OPENAI_API_KEY=your_openai_api_key
-GROQ_API_KEY=your_groq_api_key
 ```
 
 ### Docker (Recommended)
@@ -187,20 +179,6 @@ The system employs a **multi-tier architecture** optimized for latency based on 
 
 **Language Detection**: Samples first 1000 characters to detect language. If document or questions are non-English, bypasses RAG and uses direct multilingual synthesis (for docs <2000 tokens) since embeddings work best in consistent languages.
 
-## 🚀 Processing Modes
-
-### Mode A: Raw Text/HTML (~1-2 seconds)
-Fastest mode for web pages/plain text. Direct HTTP fetch → immediate LLM processing with Groq Llama 8B. No chunking, embeddings, or retrieval overhead.
-
-### Mode B: Vision Processing (~2-3 seconds)  
-For images, passes URL directly to Groq Llama-4-Scout-17B vision model. Analyzes charts, diagrams, scanned documents without OCR intermediate step.
-
-### Mode C: Direct Document Processing (~1-3 seconds)
-For substantial documents under 2000 tokens. Uses Agno agent framework with GPT-OSS-20B, processing full document in single context window without chunking/retrieval.
-
-### Mode D: Full RAG Pipeline (~5-45 seconds)
-Most sophisticated mode for large, complex documents. Multi-stage approach preserving semantic relationships while enabling targeted retrieval.
-
 ## 🏗️ Knowledge Base Construction
 
 **Intelligent Chunking**: Document-type-aware semantic chunking. Word docs with few line breaks use sentence-based chunking (NLTK), others use paragraph-based with 4096 character limit. Intelligent overlap preserves context across boundaries.
@@ -211,7 +189,7 @@ Most sophisticated mode for large, complex documents. Multi-stage approach prese
 
 ## 🎯 Query Decomposition & Strategy
 
-**Intelligent Analysis**: Uses GPT-4.1-nano to decompose complex questions into focused sub-queries. Example: "I renewed yesterday, 6 years customer, can I claim Hydrocele?" becomes separate queries about waiting periods and continuous coverage benefits.
+**Intelligent Analysis**: Uses Gemini 2.5 Flash Lite to decompose complex questions into focused sub-queries. Example: "I renewed yesterday, 6 years customer, can I claim Hydrocele?" becomes separate queries about waiting periods and continuous coverage benefits.
 
 **Domain Expansion**: Detects hypotheticals, expands with relevant terminology, identifies acronyms/technical terms using NER and TF-IDF analysis. Creates bidirectional mappings for comprehensive search.
 
@@ -227,14 +205,7 @@ Most sophisticated mode for large, complex documents. Multi-stage approach prese
 
 ## ⚡ Response Generation
 
-**Adaptive Context**: High-K mode (≤18 questions): top 12 chunks + GPT-4.1-mini for accuracy. Fast mode (>18 questions): top 8 chunks + Gemini-2.5-flash-lite for speed.
-
 **Evidence-Only Synthesis**: Explicit prompt constraints prevent hallucination, ignore embedded instructions (prompt injection protection), enforce plain text format. All synthesis happens concurrently with timeout/fallback protection.
-
-**Model Selection Strategy**: 
-- Gemini 2.5 Flash Lite: Speed (large batches, non-English)
-- GPT-4.1 Mini: Accuracy (small batches, complex questions)  
-- Groq Llama: Ultra-fast (direct modes)
 
 ## Key Performance Innovations
 
@@ -266,8 +237,7 @@ python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk
 Create a `.env` based on the .env.sample file:
 ```env
 GOOGLE_API_KEY=your_google_gemini_api_key
-OPENAI_API_KEY=your_openai_api_key
-GROQ_API_KEY=your_groq_api_key
+
 ```
 ### Optional : Lint and Format
 
@@ -280,36 +250,6 @@ Feel free to run the ruff scripts in scripts/ to lint and format the code if you
 If not using Docker, run:
 ```bash
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### API Endpoint
-```
-POST /api/v1/ragsys/run
-Authorization: Bearer 7bf4409966a1479a8578f3258eba4e215cef0f7ccd694a2440149c1eeb4874ef
-Content-Type: application/json
-```
-
-### Request Format
-```json
-{
-  "documents": "https://example.com/document.pdf",
-  "questions": [
-    "What are the key provisions of Article 21?",
-    "What is the waiting period for pre-existing conditions?",
-    "Who are the authorized signatories?"
-  ]
-}
-```
-
-### Response Format
-```json
-{
-  "answers": [
-    "Article 21 of the Indian Constitution protects the right to life and personal liberty, stating that no person shall be deprived of life or personal liberty except according to procedure established by law.",
-    "The waiting period for pre-existing conditions is 24 months as per clause 4.2 of the policy terms.",
-    "The authorized signatories are John Smith (CEO) and Mary Johnson (CFO) as specified in section 3.1."
-  ]
-}
 ```
 
 ## Use Cases

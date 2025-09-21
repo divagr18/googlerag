@@ -1,10 +1,3 @@
-"""
-Ideal Contract Manager for Guardian Score System
-
-This module manages ideal contract templates that serve as benchmarks for 
-scoring uploaded contracts. Ideal contracts contain essential clauses,
-risk factors, and compliance requirements for different contract types.
-"""
 
 import os
 import hashlib
@@ -98,7 +91,8 @@ class IdealContractManager:
         compliance_requirements: List[Dict],
         scoring_weights: Dict[str, float],
         embedding: np.ndarray,
-        created_by: str = "system"
+        created_by: str = "system",
+        source_file: Optional[str] = None
     ) -> str:
         """
         Store an ideal contract template.
@@ -113,6 +107,7 @@ class IdealContractManager:
             scoring_weights: Weights for different scoring components
             embedding: Text embedding for the template
             created_by: User who created this template
+            source_file: Optional source filename for tracking
             
         Returns:
             Template ID
@@ -155,12 +150,16 @@ class IdealContractManager:
             "title": title,
             "description": description,
             "created_by": created_by,
-            "created_timestamp": datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
             "processing_version": "v1.0",
             "total_essential_clauses": len(essential_clauses),
             "total_risk_factors": len(risk_factors),
             "total_compliance_requirements": len(compliance_requirements)
         }
+        
+        # Add source file if provided
+        if source_file:
+            metadata["source_file"] = source_file
         
         # Store the full template data as document text (JSON)
         template_data = {
