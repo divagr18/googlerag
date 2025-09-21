@@ -130,7 +130,7 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload, onD
                   Test the Guardian Score System
                 </h3>
                 <p className="text-xs text-blue-200/80 leading-relaxed">
-                  Want to see how the system detects malicious contract clauses? Try uploading test contracts from 
+                  Want to see how the system detects malicious contract clauses? Try uploading test contracts from
                   <code className="mx-1 px-1.5 py-0.5 bg-blue-900/50 rounded text-blue-200 font-mono text-xs">
                     /test_contracts
                   </code>

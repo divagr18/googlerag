@@ -69,14 +69,6 @@ docker-compose -f docker-compose-gpu.yml up --build
 docker-compose -f docker-compose.yml up --build
 ```
 
-### Manual Docker Build
-```bash
-# Build the image
-docker build -t agentos .
-
-# Run the container
-docker run -p 8000:8000 -p 3000:3000 --env-file .env agentos
-```
 
 ## Testing the System
 
@@ -119,7 +111,7 @@ Upload these through the web interface to see the Guardian Score system in actio
 
 ### File Structure
 ```
-AgentOS/
+GoogleRAG/
 ├── api/                 # Backend FastAPI application
 ├── frontend/           # Next.js frontend application
 ├── test_contracts/     # Sample malicious contracts for testing
