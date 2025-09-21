@@ -118,6 +118,29 @@ export function DocumentLibrary({ documents, onSelectDocument, onFileUpload, onD
           </Button>
         </div>
 
+        {/* Test Contracts Notice */}
+        <div className="mb-6">
+          <Card className="bg-blue-950/30 border-blue-800/50 p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0">
+                <FileText className="w-5 h-5 text-blue-400 mt-0.5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-blue-300 mb-1">
+                  Test the Guardian Score System
+                </h3>
+                <p className="text-xs text-blue-200/80 leading-relaxed">
+                  Want to see how the system detects malicious contract clauses? Try uploading test contracts from 
+                  <code className="mx-1 px-1.5 py-0.5 bg-blue-900/50 rounded text-blue-200 font-mono text-xs">
+                    /test_contracts
+                  </code>
+                  including the problematic rental agreement and shady employment contract. These contain exploitation patterns like excessive penalties, unfair termination clauses, and rights violations that the AI will flag.
+                </p>
+              </div>
+            </div>
+          </Card>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {documents.map((document) => (
             <Card

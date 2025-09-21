@@ -23,6 +23,15 @@ class ExploitationType(Enum):
     MAINTENANCE_BURDEN = "maintenance_burden"
     PRIVACY_VIOLATION = "privacy_violation"
     DISCRIMINATORY_TERMS = "discriminatory_terms"
+    # General exploitation types for all contracts
+    POWER_IMBALANCE = "power_imbalance"
+    UNCONSCIONABLE_TERMS = "unconscionable_terms"
+    MODIFICATION_ABUSE = "modification_abuse"
+    DISPUTE_RESOLUTION_BIAS = "dispute_resolution_bias"
+    INTELLECTUAL_PROPERTY_OVERREACH = "intellectual_property_overreach"
+    NON_COMPETE_ABUSE = "non_compete_abuse"
+    SALARY_MANIPULATION = "salary_manipulation"
+    WORK_CONDITION_VIOLATION = "work_condition_violation"
 
 @dataclass
 class ExploitationFlag:
@@ -45,19 +54,285 @@ class GuardianScoreResult:
 
 class GuardianScoreAnalyzer:
     """
-    Analyzes rental contracts against ideal templates to detect exploitation
-    and protect users from unfair terms.
+    Analyzes contracts against ideal templates to detect exploitation
+    and protect users from unfair terms. Uses Gemini API for advanced analysis.
     """
     
     def __init__(self):
         self.exploitation_patterns = self._load_exploitation_patterns()
         self.fair_clause_patterns = self._load_fair_clause_patterns()
         self.required_protections = self._load_required_protections()
-        self.ai_engine = None  # Will be set when AI is available
     
-    def set_ai_engine(self, ai_engine):
-        """Set the AI recommendation engine"""
-        self.ai_engine = ai_engine
+    async def _llm_based_harmful_clause_detection(self, contract_text: str) -> List[ExploitationFlag]:
+        """
+        Use Gemini LLM to detect potentially harmful clauses that regex patterns might miss.
+        This provides a more nuanced understanding of contract language.
+        Processes multiple chunks in parallel for better performance.
+        """
+        logger.info("🤖 Starting LLM-based harmful clause detection with Gemini API")
+        
+        try:
+            # Import here to avoid circular imports
+            from google import genai
+            from google.genai import types
+            import os
+            
+            # Initialize Gemini client
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                logger.warning("GOOGLE_API_KEY not found, skipping LLM-based detection")
+                return []
+            
+            gemini_client = genai.Client(api_key=api_key)
+            
+            # Split contract into manageable chunks for analysis
+            chunks = self._split_contract_into_chunks(contract_text)
+            logger.info(f"📄 Split contract into {len(chunks)} chunks for LLM analysis")
+            
+            # Limit to maximum 30 chunks
+            if len(chunks) > 30:
+                logger.warning(f"Contract too large ({len(chunks)} chunks), limiting to first 30 chunks")
+                chunks = chunks[:30]
+            
+            async def analyze_chunk(chunk_idx: int, chunk: str) -> List[ExploitationFlag]:
+                """Analyze a single chunk with Gemini"""
+                logger.info(f"🔍 Analyzing chunk {chunk_idx + 1}/{len(chunks)} ({len(chunk)} characters)")
+                
+                # Prompt for LLM to analyze harmful clauses
+                analysis_prompt = f"""
+                Analyze the following contract text for potentially harmful, exploitative, or unconscionable clauses.
+                Focus on identifying:
+                1. Unfair power imbalances
+                2. Excessive penalties or financial burdens
+                3. Violation of worker/tenant rights
+                4. Unreasonable restrictions or obligations
+                5. Clauses that may be illegal or unenforceable
+                6. Hidden costs or financial obligations
+                7. Waiver of important legal rights
+                8. Overly broad non-compete or confidentiality terms
+                
+                IMPORTANT: For the "clause_text" field, provide the EXACT text from the contract as it appears, including punctuation and formatting. This text will be highlighted in the original document, so it must match exactly.
+                
+                For each problematic clause you find, provide:
+                - The specific problematic text (EXACT quote from contract - minimum 15 characters)
+                - Why it's harmful or unfair
+                - Severity level (1-100, where 100 is extremely dangerous)
+                - Type of exploitation (financial_exploitation, legal_rights_violation, power_imbalance, etc.)
+                
+                Contract text to analyze:
+                {chunk}
+                
+                Respond in JSON format:
+                {{
+                    "harmful_clauses": [
+                        {{
+                            "clause_text": "EXACT quote from contract as it appears",
+                            "harm_description": "explanation of why this is harmful",
+                            "severity": 85,
+                            "exploitation_type": "power_imbalance",
+                            "recommendation": "specific advice for addressing this"
+                        }}
+                    ]
+                }}
+                """
+                
+                try:
+                    # Get AI analysis using Gemini
+                    response = await gemini_client.aio.models.generate_content(
+                        model="gemini-2.5-flash-lite",
+                        contents=[analysis_prompt],
+                        config=types.GenerateContentConfig(
+                            temperature=0.1,
+                            system_instruction="You are a legal expert analyzing contracts for exploitation. Return only valid JSON.",
+                        ),
+                    )
+                    
+                    logger.info(f"📥 Gemini raw response for chunk {chunk_idx}: {response.text[:500]}...")
+                    
+                    # Clean and parse AI response
+                    raw_text = response.text.strip()
+                    
+                    # Try to extract JSON from response if it's wrapped in markdown
+                    if raw_text.startswith("```json"):
+                        raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+                    elif raw_text.startswith("```"):
+                        raw_text = raw_text.replace("```", "").strip()
+                    
+                    # Try to find JSON object in the response
+                    json_start = raw_text.find("{")
+                    json_end = raw_text.rfind("}") + 1
+                    
+                    if json_start != -1 and json_end > json_start:
+                        json_text = raw_text[json_start:json_end]
+                        logger.info(f"🔧 Extracted JSON for chunk {chunk_idx}: {json_text[:200]}...")
+                        try:
+                            analysis = json.loads(json_text)
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"❌ JSON parsing failed for chunk {chunk_idx}: {str(e)}")
+                            logger.debug(f"Failed JSON text: {json_text}")
+                            return []
+                    else:
+                        logger.warning(f"❌ No JSON object found in Gemini response for chunk {chunk_idx}")
+                        logger.debug(f"Raw response: {raw_text}")
+                        return []
+                    
+                    # Convert AI findings to ExploitationFlag objects
+                    chunk_flags = []
+                    for clause_finding in analysis.get("harmful_clauses", []):
+                        try:
+                            exploitation_type = self._map_ai_type_to_enum(clause_finding.get("exploitation_type", "power_imbalance"))
+                            risk_level = self._determine_risk_level(clause_finding.get("severity", 50))
+                            
+                            # Get the clause text and ensure it's valid for highlighting
+                            raw_clause_text = clause_finding.get("clause_text", "")
+                            
+                            # Don't truncate too aggressively for LLM clauses - they need to match original text
+                            if len(raw_clause_text) > 200:
+                                # For LLM clauses, try to find a good sentence break
+                                sentence_break = raw_clause_text.find('.', 150)
+                                if sentence_break != -1 and sentence_break < 200:
+                                    processed_clause_text = raw_clause_text[:sentence_break + 1].strip()
+                                else:
+                                    # Try word boundary
+                                    word_break = raw_clause_text.rfind(' ', 150, 200)
+                                    if word_break != -1:
+                                        processed_clause_text = raw_clause_text[:word_break].strip() + "..."
+                                    else:
+                                        processed_clause_text = raw_clause_text[:200].strip() + "..."
+                            else:
+                                processed_clause_text = raw_clause_text.strip()
+                            
+                            # Skip if clause text is too short or empty
+                            if len(processed_clause_text) < 10:
+                                logger.warning(f"⚠️ Skipping LLM flag with too short clause text: '{processed_clause_text}'")
+                                continue
+                            
+                            flag = ExploitationFlag(
+                                type=exploitation_type,
+                                risk_level=risk_level,
+                                description=f"AI-detected: {clause_finding.get('harm_description', 'Potentially harmful clause')}",
+                                clause_text=processed_clause_text,
+                                severity_score=clause_finding.get("severity", 50),
+                                recommendation=clause_finding.get("recommendation", "Review this clause with legal counsel"),
+                                ai_recommendation=clause_finding.get("recommendation", "")
+                            )
+                            chunk_flags.append(flag)
+                            logger.info(f"✅ Added LLM flag from chunk {chunk_idx}: {exploitation_type.value} (severity: {flag.severity_score})")
+                            logger.debug(f"📝 LLM clause text: '{processed_clause_text[:100]}...'")
+                        except Exception as e:
+                            logger.warning(f"❌ Error processing AI clause finding from chunk {chunk_idx}: {e}")
+                            continue
+                    
+                    return chunk_flags
+                            
+                except json.JSONDecodeError:
+                    logger.warning(f"❌ Gemini returned invalid JSON for chunk {chunk_idx}")
+                    return []
+                except Exception as e:
+                    logger.warning(f"❌ Gemini analysis failed for chunk {chunk_idx}: {str(e)}")
+                    return []
+            
+            # Process chunks in parallel batches of up to 10
+            batch_size = 10
+            all_flags = []
+            
+            for i in range(0, len(chunks), batch_size):
+                batch_chunks = chunks[i:i + batch_size]
+                logger.info(f"🚀 Processing batch {i//batch_size + 1}/{(len(chunks) + batch_size - 1)//batch_size} with {len(batch_chunks)} chunks")
+                
+                # Create tasks for parallel processing
+                tasks = [
+                    analyze_chunk(i + j, chunk) 
+                    for j, chunk in enumerate(batch_chunks)
+                ]
+                
+                # Execute batch in parallel
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Collect results from this batch
+                for result in batch_results:
+                    if isinstance(result, list):
+                        all_flags.extend(result)
+                    elif isinstance(result, Exception):
+                        logger.warning(f"❌ Chunk analysis failed with exception: {result}")
+            
+            logger.info(f"🎯 Gemini LLM detected {len(all_flags)} additional harmful clauses across {len(chunks)} chunks")
+            return all_flags
+            
+        except Exception as e:
+            logger.error(f"❌ LLM-based analysis failed: {e}")
+            return []
+    
+    def _split_contract_into_chunks(self, contract_text: str, max_chunk_size: int = 3000) -> List[str]:
+        """Split contract into chunks for LLM analysis"""
+        # Split by paragraphs or sections first
+        paragraphs = contract_text.split('\n\n')
+        chunks = []
+        current_chunk = ""
+        
+        for paragraph in paragraphs:
+            if len(current_chunk) + len(paragraph) > max_chunk_size:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = paragraph
+            else:
+                current_chunk += "\n\n" + paragraph if current_chunk else paragraph
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+            
+        return chunks
+    
+    def _map_ai_type_to_enum(self, ai_type: str) -> ExploitationType:
+        """Map AI-generated exploitation type to our enum"""
+        type_mapping = {
+            "financial": ExploitationType.FINANCIAL_EXPLOITATION,
+            "financial_exploitation": ExploitationType.FINANCIAL_EXPLOITATION,
+            "legal_rights": ExploitationType.LEGAL_RIGHTS_VIOLATION,
+            "legal_rights_violation": ExploitationType.LEGAL_RIGHTS_VIOLATION,
+            "power_imbalance": ExploitationType.POWER_IMBALANCE,
+            "unconscionable": ExploitationType.UNCONSCIONABLE_TERMS,
+            "unconscionable_terms": ExploitationType.UNCONSCIONABLE_TERMS,
+            "modification": ExploitationType.MODIFICATION_ABUSE,
+            "modification_abuse": ExploitationType.MODIFICATION_ABUSE,
+            "dispute_resolution": ExploitationType.DISPUTE_RESOLUTION_BIAS,
+            "dispute_resolution_bias": ExploitationType.DISPUTE_RESOLUTION_BIAS,
+            "intellectual_property": ExploitationType.INTELLECTUAL_PROPERTY_OVERREACH,
+            "ip_overreach": ExploitationType.INTELLECTUAL_PROPERTY_OVERREACH,
+            "non_compete": ExploitationType.NON_COMPETE_ABUSE,
+            "non_compete_abuse": ExploitationType.NON_COMPETE_ABUSE,
+            "salary": ExploitationType.SALARY_MANIPULATION,
+            "salary_manipulation": ExploitationType.SALARY_MANIPULATION,
+            "work_conditions": ExploitationType.WORK_CONDITION_VIOLATION,
+            "work_condition_violation": ExploitationType.WORK_CONDITION_VIOLATION,
+            "termination": ExploitationType.UNFAIR_TERMINATION,
+            "unfair_termination": ExploitationType.UNFAIR_TERMINATION,
+            "privacy": ExploitationType.PRIVACY_VIOLATION,
+            "privacy_violation": ExploitationType.PRIVACY_VIOLATION,
+        }
+        return type_mapping.get(ai_type.lower(), ExploitationType.POWER_IMBALANCE)
+    
+    def _safe_truncate_clause_text(self, text: str, max_length: int = 120) -> str:
+        """
+        Safely truncate clause text for frontend display and regex safety.
+        Finds good break points to avoid cutting words in half.
+        """
+        if not text or len(text) <= max_length:
+            return text.strip()
+        
+        # Try to break at sentence end
+        sentence_end = text.rfind('.', 0, max_length)
+        if sentence_end > max_length // 2:  # Only if we find a sentence break in the latter half
+            return text[:sentence_end + 1].strip()
+        
+        # Try to break at word boundary
+        word_boundary = text.rfind(' ', 0, max_length)
+        if word_boundary > max_length // 2:  # Only if we find a word break in the latter half
+            return text[:word_boundary].strip() + "..."
+        
+        # Last resort: hard truncate
+        return text[:max_length].strip() + "..."
+    
     
     def _load_exploitation_patterns(self) -> Dict[ExploitationType, List[Dict]]:
         """Load patterns that indicate exploitation"""
@@ -169,6 +444,185 @@ class GuardianScoreAnalyzer:
                     "severity": 20,
                     "description": "Complete pet ban (even small pets)"
                 }
+            ],
+            # GENERAL CONTRACT EXPLOITATION PATTERNS (work across all contract types)
+            ExploitationType.POWER_IMBALANCE: [
+                {
+                    "pattern": r"(?i)waives?\s+(?:all\s+)?rights?|waives?\s+right\s+to|cannot\s+(?:challenge|dispute|appeal)|no\s+right\s+to|forfeits?\s+(?:all\s+)?rights?",
+                    "threshold": 1,
+                    "severity": 95,
+                    "description": "Illegal waiver of fundamental legal rights"
+                },
+                {
+                    "pattern": r"(?i)(?:company|employer|landlord|party).*?(?:sole\s+discretion|absolute\s+discretion|at\s+will|as\s+(?:they\s+)?see\s+fit)",
+                    "threshold": 1,
+                    "severity": 80,
+                    "description": "One party has absolute discretionary power"
+                },
+                {
+                    "pattern": r"(?i)cannot\s+(?:negotiate|request\s+changes|modify|discuss)|non-?negotiable|take\s+it\s+or\s+leave\s+it",
+                    "threshold": 1,
+                    "severity": 75,
+                    "description": "Contract terms are non-negotiable"
+                }
+            ],
+            ExploitationType.UNCONSCIONABLE_TERMS: [
+                {
+                    "pattern": r"(?i)penalty.*?(\d+)%|(\d+)%.*?(?:penalty|fine|deduction)|(?:penalty|fine).*?₹?\s*(\d{1,3}),?(\d{3})",
+                    "threshold": 25,  # More than 25% penalty is excessive
+                    "severity": 85,
+                    "description": "Excessive penalty percentages or amounts"
+                },
+                {
+                    "pattern": r"(?i)unlimited.*?(?:liability|obligation|responsibility)|(?:personally\s+)?guarantees?\s+(?:all\s+)?(?:debts?|obligations?|liabilities?)",
+                    "threshold": 1,
+                    "severity": 90,
+                    "description": "Unlimited personal liability or guarantees"
+                },
+                {
+                    "pattern": r"(?i)(?:may\s+be\s+)?(?:delayed|withheld|suspended).*?(?:up\s+to\s+)?(\d+)\s*(?:days?|months?)|payments?.*?delayed.*?(\d+)",
+                    "threshold": 30,  # More than 30 days delay is problematic
+                    "severity": 70,
+                    "description": "Excessive payment delays"
+                }
+            ],
+            ExploitationType.MODIFICATION_ABUSE: [
+                {
+                    "pattern": r"(?i)(?:may\s+)?(?:modify|change|alter|update).*?(?:any\s+time|without\s+(?:notice|consent))|(?:terms?|conditions?).*?(?:may\s+)?(?:be\s+)?(?:changed|modified).*?(?:any\s+time|unilaterally)",
+                    "threshold": 1,
+                    "severity": 85,
+                    "description": "Contract can be modified unilaterally without consent"
+                },
+                {
+                    "pattern": r"(?i)continued.*?(?:employment|use|occupancy|participation).*?constitutes\s+acceptance|acceptance\s+(?:of\s+)?(?:all\s+)?(?:changes|modifications)",
+                    "threshold": 1,
+                    "severity": 80,
+                    "description": "Forced acceptance of changes through continued relationship"
+                }
+            ],
+            ExploitationType.DISPUTE_RESOLUTION_BIAS: [
+                {
+                    "pattern": r"(?i)(?:mandatory\s+)?arbitration.*?(?:at\s+)?(?:employee|tenant|party).*?expense|(?:waives?\s+)?right\s+to.*?(?:jury\s+trial|court|litigation)",
+                    "threshold": 1,
+                    "severity": 85,
+                    "description": "Biased dispute resolution requiring party to pay costs"
+                },
+                {
+                    "pattern": r"(?i)(?:jurisdiction|venue).*?chosen.*?(?:solely\s+)?by|(?:all\s+)?(?:legal\s+)?costs?.*?(?:regardless\s+of\s+outcome|borne\s+by)",
+                    "threshold": 1,
+                    "severity": 75,
+                    "description": "Unfair jurisdiction choice or cost allocation"
+                }
+            ],
+            ExploitationType.INTELLECTUAL_PROPERTY_OVERREACH: [
+                {
+                    "pattern": r"(?i)(?:all\s+)?(?:ideas?|thoughts?|concepts?|inventions?).*?(?:belong\s+to|property\s+of)|(?:personal\s+)?(?:projects?|work).*?(?:outside\s+)?(?:office\s+)?hours?.*?(?:belong|property)",
+                    "threshold": 1,
+                    "severity": 80,
+                    "description": "Overreach of intellectual property rights to personal work"
+                },
+                {
+                    "pattern": r"(?i)(?:existing|prior).*?intellectual\s+property.*?(?:assign|transfer)|(?:future\s+)?(?:patents?|trademarks?|copyrights?).*?(?:automatically\s+)?transfer",
+                    "threshold": 1,
+                    "severity": 85,
+                    "description": "Forced assignment of existing or future intellectual property"
+                }
+            ],
+            ExploitationType.NON_COMPETE_ABUSE: [
+                {
+                    "pattern": r"(?i)(?:non-?compete|cannot\s+work).*?(\d+)\s*years?|(\d+)\s*years?.*?(?:non-?compete|cannot\s+work)",
+                    "threshold": 24,  # More than 2 years is excessive
+                    "severity": 85,
+                    "description": "Excessive non-compete period duration"
+                },
+                {
+                    "pattern": r"(?i)(?:across\s+)?(?:all\s+)?industries?|(?:any\s+)?(?:company|business|industry)|(?:cannot\s+)?(?:start|begin|engage).*?(?:any\s+)?(?:business|freelance)",
+                    "threshold": 1,
+                    "severity": 90,
+                    "description": "Overly broad non-compete restrictions"
+                }
+            ],
+            ExploitationType.SALARY_MANIPULATION: [
+                {
+                    "pattern": r"(?i)(?:salary|wages?|compensation).*?(?:subject\s+to\s+)?(?:unlimited\s+)?deductions?|deduct(?:ed|ions?).*?(?:salary|wages?)",
+                    "threshold": 1,
+                    "severity": 85,
+                    "description": "Unlimited or excessive salary deductions"
+                },
+                {
+                    "pattern": r"(?i)(?:sick\s+)?(?:days?|leave).*?(?:penalty|deduction)|(?:penalty|deduction).*?(?:sick\s+)?(?:days?|leave)",
+                    "threshold": 1,
+                    "severity": 90,
+                    "description": "Penalties for taking sick leave (likely illegal)"
+                },
+                {
+                    "pattern": r"(?i)(?:salary|wages?).*?(?:may\s+be\s+)?reduced.*?(?:discretion|any\s+time)|reduced.*?(?:salary|wages?|compensation)",
+                    "threshold": 1,
+                    "severity": 80,
+                    "description": "Arbitrary salary reduction clauses"
+                },
+                {
+                    "pattern": r"(?i)(?:late|tardy|delay).*?(?:arrival|coming).*?(?:deduction|penalty)|(?:full\s+day|entire\s+day).*?(?:salary|pay).*?deduction",
+                    "threshold": 1,
+                    "severity": 85,
+                    "description": "Excessive penalties for minor tardiness"
+                },
+                {
+                    "pattern": r"(?i)(?:unsatisfactory|poor|inadequate).*?(?:performance|work|project).*?(?:deduction|penalty)|(?:₹?\s*)?(\d{1,2}),?(\d{3,})\s*(?:deduction|penalty)",
+                    "threshold": 25000,  # More than ₹25,000 deduction is excessive
+                    "severity": 80,
+                    "description": "Excessive financial penalties for subjective performance issues"
+                },
+                {
+                    "pattern": r"(?i)(?:salary|wages?).*?(?:delayed|withheld|suspended).*?(\d+)\s*days?|payments?.*?(?:up\s+to\s+)?(\d+)\s*days?.*?(?:delay|late)",
+                    "threshold": 7,  # More than 7 days delay is problematic
+                    "severity": 75,
+                    "description": "Excessive salary payment delays"
+                }
+            ],
+            ExploitationType.WORK_CONDITION_VIOLATION: [
+                {
+                    "pattern": r"(?i)(?:mandatory|required).*?(\d+)\+?\s*hours?.*?(?:week|weekly)|(\d+)\+?\s*hours?.*?(?:per\s+)?week.*?(?:mandatory|required)",
+                    "threshold": 50,  # More than 50 hours per week
+                    "severity": 75,
+                    "description": "Excessive mandatory work hours"
+                },
+                {
+                    "pattern": r"(?i)(?:unlimited\s+)?overtime.*?(?:no\s+)?(?:additional\s+)?compensation|(?:no\s+)?(?:overtime\s+)?(?:pay|compensation).*?overtime",
+                    "threshold": 1,
+                    "severity": 85,
+                    "description": "Unpaid overtime requirements (likely illegal)"
+                },
+                {
+                    "pattern": r"(?i)(?:available\s+)?24/?7|(?:respond|reply).*?(\d+)\s*minutes?|(\d+)\s*minutes?.*?(?:respond|reply)",
+                    "threshold": 30,  # Less than 30 minutes response time
+                    "severity": 70,
+                    "description": "Unreasonable availability or response time requirements"
+                },
+                {
+                    "pattern": r"(?i)(?:all\s+)?(?:holidays?|weekends?).*?(?:mandatory|required|work)|(?:mandatory|required).*?(?:holidays?|weekends?|work)",
+                    "threshold": 1,
+                    "severity": 80,
+                    "description": "Mandatory work on all holidays and weekends"
+                },
+                {
+                    "pattern": r"(?i)(?:vacation|time\s+off|leave).*?(?:may\s+be\s+)?(?:denied|rejected).*?(?:without\s+reason|any\s+reason)|(?:no\s+)?(?:guaranteed|assured).*?(?:vacation|leave)",
+                    "threshold": 1,
+                    "severity": 75,
+                    "description": "Vacation time can be denied without reason"
+                },
+                {
+                    "pattern": r"(?i)(?:probation|probationary).*?(\d+)\s*(?:months?|years?)|(\d+)\s*(?:months?|years?).*?(?:probation|probationary)",
+                    "threshold": 12,  # More than 12 months probation
+                    "severity": 65,
+                    "description": "Excessive probationary period"
+                },
+                {
+                    "pattern": r"(?i)(?:employee|worker).*?(?:purchase|buy).*?(?:stock|shares)|(?:must\s+)?(?:purchase|buy).*?(?:company\s+)?(?:stock|shares)",
+                    "threshold": 1,
+                    "severity": 85,
+                    "description": "Forced purchase of company stock"
+                }
             ]
         }
     
@@ -258,7 +712,7 @@ class GuardianScoreAnalyzer:
                             type=exploitation_type,
                             risk_level=risk_level,
                             description=pattern_config["description"],
-                            clause_text=match.group()[:200] + "..." if len(match.group()) > 200 else match.group(),
+                            clause_text=self._safe_truncate_clause_text(match.group()),
                             severity_score=pattern_config["severity"],
                             recommendation=self._get_recommendation(exploitation_type, pattern_config["description"])
                         )
@@ -275,38 +729,13 @@ class GuardianScoreAnalyzer:
             if not self._has_protection(contract_text, protection):
                 missing_protections.append(protection)
         
-        # Generate AI recommendations for exploitation flags
-        if self.ai_engine and exploitation_flags:
-            try:
-                # Prepare flags for AI recommendation generation
-                flag_data = []
-                for flag in exploitation_flags:
-                    flag_data.append({
-                        "type": flag.type.value,
-                        "clause_text": flag.clause_text,
-                        "description": flag.description,
-                        "severity_score": flag.severity_score
-                    })
-                
-                # Generate AI recommendations
-                enhanced_flags_data = await self.ai_engine.generate_bulk_recommendations(flag_data)
-                
-                # Update exploitation flags with AI recommendations
-                for i, flag in enumerate(exploitation_flags):
-                    if i < len(enhanced_flags_data):
-                        flag.ai_recommendation = enhanced_flags_data[i].get("ai_recommendation", flag.recommendation)
-                    else:
-                        flag.ai_recommendation = flag.recommendation
-                        
-            except Exception as e:
-                logger.warning(f"AI recommendation generation failed: {str(e)}")
-                # Continue with static recommendations
-                for flag in exploitation_flags:
-                    flag.ai_recommendation = flag.recommendation
-        else:
-            # Use static recommendations if AI is not available
-            for flag in exploitation_flags:
-                flag.ai_recommendation = flag.recommendation
+        # LLM-based harmful clause detection
+        llm_flags = await self._llm_based_harmful_clause_detection(contract_text)
+        exploitation_flags.extend(llm_flags)
+        
+        # Use static recommendations for all flags
+        for flag in exploitation_flags:
+            flag.ai_recommendation = flag.recommendation
         
         # Calculate overall score
         overall_score = self._calculate_overall_score(exploitation_flags, fair_clauses, missing_protections)
@@ -346,7 +775,16 @@ class GuardianScoreAnalyzer:
             ExploitationType.EXCESSIVE_PENALTIES: "Remove excessive penalty clauses. Penalties should be reasonable and proportionate.",
             ExploitationType.MAINTENANCE_BURDEN: "Landlord should be responsible for structural repairs and major maintenance.",
             ExploitationType.PRIVACY_VIOLATION: "Ensure landlord provides 24-48 hours notice before entering the property.",
-            ExploitationType.DISCRIMINATORY_TERMS: "Consider if these restrictions are reasonable and legally enforceable."
+            ExploitationType.DISCRIMINATORY_TERMS: "Consider if these restrictions are reasonable and legally enforceable.",
+            # New general recommendations
+            ExploitationType.POWER_IMBALANCE: "DO NOT SIGN. Seek legal counsel immediately. This creates dangerous power imbalance.",
+            ExploitationType.UNCONSCIONABLE_TERMS: "REJECT these terms. They are potentially legally unconscionable and unenforceable.",
+            ExploitationType.MODIFICATION_ABUSE: "Require written consent for any changes. Unilateral modification clauses are problematic.",
+            ExploitationType.DISPUTE_RESOLUTION_BIAS: "Negotiate fair dispute resolution. Both parties should share arbitration costs.",
+            ExploitationType.INTELLECTUAL_PROPERTY_OVERREACH: "Limit IP assignment to work-related inventions only. Protect personal projects.",
+            ExploitationType.NON_COMPETE_ABUSE: "Reduce non-compete scope and duration. Overly broad restrictions may be unenforceable.",
+            ExploitationType.SALARY_MANIPULATION: "CRITICAL: Ensure salary protection. Unlimited deductions violate labor laws.",
+            ExploitationType.WORK_CONDITION_VIOLATION: "ILLEGAL: These work conditions likely violate labor laws. Seek legal advice."
         }
         return recommendations.get(exploitation_type, "Review this clause carefully and consider negotiating.")
     

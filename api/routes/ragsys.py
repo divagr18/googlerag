@@ -78,6 +78,31 @@ from api.core.guardian_score import (
 from api.core.document_classifier import DocumentClassifier
 from api.core.ai_recommendation_engine import AIRecommendationEngine
 
+
+def extract_category_from_filename(filename: str):
+    """
+    Extract category from filename, handling multi-word categories properly.
+    Tries to match against valid ContractCategory values.
+    """
+    # Remove .pdf extension
+    name_without_ext = filename.replace('.pdf', '')
+    parts = name_without_ext.split('_')
+    
+    # Get all valid category values
+    valid_categories = [cat.value for cat in ContractCategory]
+    
+    # Try progressively longer category combinations
+    for i in range(1, len(parts) + 1):
+        potential_category = '_'.join(parts[:i])
+        if potential_category in valid_categories:
+            description_parts = parts[i:]
+            if description_parts:  # Ensure there's still a description part
+                description = '_'.join(description_parts).replace('_', ' ').title()
+                return potential_category, description
+    
+    return None, None
+
+
 # --- API Router and Pydantic Models ---
 ragsys_router = APIRouter(prefix="/ragsys")
 
@@ -411,15 +436,8 @@ async def analyze_contract_if_applicable(
             try:
                 print(f"🛡️ Running Guardian Score analysis for {classification['contract_type']} contract")
                 
-                # Initialize Guardian Score analyzer with AI
+                # Initialize Guardian Score analyzer (now uses Gemini directly)
                 guardian_analyzer = GuardianScoreAnalyzer()
-                
-                # Initialize AI recommendation engine
-                try:
-                    ai_engine = AIRecommendationEngine()
-                    guardian_analyzer.set_ai_engine(ai_engine)
-                except Exception as e:
-                    logger.warning(f"AI engine initialization failed: {str(e)}")
                 
                 # Run Guardian Score analysis
                 guardian_result = await guardian_analyzer.analyze_contract(full_text)
@@ -1558,9 +1576,9 @@ async def process_folder_templates():
                 file_path = os.path.join(templates_folder, pdf_file)
                 print(f"📄 Processing: {pdf_file}")
                 
-                # Extract category from filename (before first underscore)
-                filename_parts = pdf_file.replace('.pdf', '').split('_')
-                if len(filename_parts) < 2:
+                # Extract category from filename using the helper function
+                category_result = extract_category_from_filename(pdf_file)
+                if not category_result:
                     print(f"⚠️ Skipping {pdf_file} - Invalid filename format. Use: category_description.pdf")
                     skipped_files.append({
                         "file": pdf_file,
@@ -1568,8 +1586,7 @@ async def process_folder_templates():
                     })
                     continue
                 
-                category_name = filename_parts[0].lower()
-                description = "_".join(filename_parts[1:]).replace('_', ' ').title()
+                category_name, description = category_result
                 
                 # Validate category
                 try:

@@ -42,79 +42,228 @@ export function DocumentViewer({ document, highlightPage, onSendMessage }: Docum
         return `${explanation} Risk Level: ${flag.risk_level.toUpperCase()}`
     }
 
-    // Function to highlight risky clauses in text content
-    const highlightRiskyClauses = (content: string) => {
+    // Function to create highlighted text components
+    const createHighlightedText = (content: string) => {
         if (!document?.exploitation_flags || document.exploitation_flags.length === 0) {
-            return content
+            return <span className="whitespace-pre-wrap">{content}</span>
         }
 
-        let highlightedContent = content
         const highlightColors = {
-            'critical': 'bg-red-900 bg-opacity-50 text-white border-l-2 border-red-500',
-            'high': 'bg-orange-900 bg-opacity-50 text-white border-l-2 border-orange-500',
-            'medium': 'bg-yellow-900 bg-opacity-50 text-white border-l-2 border-yellow-500',
-            'low': 'bg-blue-900 bg-opacity-50 text-white border-l-2 border-blue-500'
+            'critical': 'bg-red-500 bg-opacity-60 text-white border-l-2 border-red-400',
+            'high': 'bg-orange-500 bg-opacity-60 text-white border-l-2 border-orange-400',
+            'medium': 'bg-yellow-500 bg-opacity-60 text-black border-l-2 border-yellow-400',
+            'low': 'bg-blue-500 bg-opacity-60 text-white border-l-2 border-blue-400'
         }
 
-        // Sort exploitation flags by clause text length (longest first) to avoid nested replacements
+        // Create array of text segments with highlight information
+        const segments: Array<{ text: string, isHighlighted: boolean, flag?: any }> = []
+        let remainingContent = content
+        const processedRanges: Array<{ start: number, end: number }> = []
+
+        // Sort exploitation flags by clause text length (longest first) to prioritize longer matches
         const sortedFlags = [...document.exploitation_flags]
-            .filter(flag => flag.clause_text && flag.clause_text.trim().length > 0)
+            .filter(flag => flag.clause_text && flag.clause_text.trim().length > 15)
             .sort((a, b) => b.clause_text.length - a.clause_text.length)
 
-        sortedFlags.forEach((flag, index) => {
+        console.log(`📋 Processing ${sortedFlags.length} exploitation flags for highlighting`)
+        sortedFlags.forEach((flag, idx) => {
+            console.log(`🔍 Flag ${idx}: ${flag.type} - "${flag.clause_text.substring(0, 50)}..."`)
+        })
+
+        sortedFlags.forEach((flag) => {
             if (flag.clause_text) {
-                const clauseText = flag.clause_text.trim()
-                const riskLevel = flag.risk_level.toLowerCase()
-                const colorClass = highlightColors[riskLevel as keyof typeof highlightColors] || highlightColors.medium
+                let clauseText = flag.clause_text.trim()
 
-                // Create a unique identifier for this clause
-                const clauseId = `clause-${index}`
+                if (clauseText.length < 15) return
 
-                // Escape special regex characters but allow for some text variations
-                const escapedClause = clauseText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                const regex = new RegExp(`(${escapedClause})`, 'gi')
+                // For LLM-detected clauses, try multiple matching strategies
+                let matchFound = false
 
-                highlightedContent = highlightedContent.replace(regex,
-                    `<span id="${clauseId}" 
-                        class="inline-block px-1 rounded ${colorClass} cursor-pointer transition-all hover:shadow-lg" 
-                        data-flag='${JSON.stringify(flag).replace(/'/g, '&#39;')}'
-                        onmouseenter="window.showClauseTooltip(event, '${clauseId}')"
-                        onmouseleave="window.hideClauseTooltip()"
-                        title="${flag.type.replace('_', ' ')}: ${flag.description}">$1</span>`
-                )
+                // Strategy 1: Try exact match first
+                const lowerContent = content.toLowerCase()
+                let lowerClause = clauseText.toLowerCase()
+                let searchStart = 0
+
+                let index = lowerContent.indexOf(lowerClause, searchStart)
+
+                // Strategy 2: If no exact match, try with truncated versions
+                if (index === -1 && clauseText.length > 50) {
+                    // Try progressively shorter versions
+                    const lengths = [150, 100, 80, 60, 40]
+                    for (const maxLength of lengths) {
+                        if (clauseText.length > maxLength) {
+                            const truncateAt = clauseText.lastIndexOf('.', maxLength) ||
+                                clauseText.lastIndexOf(' ', maxLength) ||
+                                maxLength
+                            const truncatedClause = clauseText.substring(0, truncateAt).trim()
+
+                            if (truncatedClause.length >= 15) {
+                                lowerClause = truncatedClause.toLowerCase()
+                                index = lowerContent.indexOf(lowerClause, searchStart)
+                                if (index !== -1) {
+                                    clauseText = truncatedClause
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Strategy 3: If still no match, try first sentence
+                if (index === -1) {
+                    const firstSentence = clauseText.split('.')[0].trim()
+                    if (firstSentence.length >= 15) {
+                        lowerClause = firstSentence.toLowerCase()
+                        index = lowerContent.indexOf(lowerClause, searchStart)
+                        if (index !== -1) {
+                            clauseText = firstSentence
+                        }
+                    }
+                }
+
+                if (index !== -1) {
+                    const endIndex = index + clauseText.length
+                    console.log(`✅ Found match for flag: "${clauseText.substring(0, 30)}..." at position ${index}-${endIndex}`)
+
+                    // Check if this range overlaps with already processed ranges
+                    const hasOverlap = processedRanges.some(range =>
+                        (index >= range.start && index < range.end) ||
+                        (endIndex > range.start && endIndex <= range.end) ||
+                        (index <= range.start && endIndex >= range.end)
+                    )
+
+                    if (!hasOverlap) {
+                        processedRanges.push({ start: index, end: endIndex })
+                        console.log(`✅ Added highlight range: ${index}-${endIndex}`)
+                    } else {
+                        console.log(`⚠️ Skipped overlapping range: ${index}-${endIndex}`)
+                    }
+                } else {
+                    console.log(`❌ No match found for flag: "${clauseText.substring(0, 30)}..."`)
+                }
             }
         })
 
-        return highlightedContent
+        // Sort processed ranges by start position
+        processedRanges.sort((a, b) => a.start - b.start)
+
+        // Create segments from the ranges
+        let currentPos = 0
+        processedRanges.forEach((range, index) => {
+            // Add text before the highlight
+            if (currentPos < range.start) {
+                segments.push({
+                    text: content.substring(currentPos, range.start),
+                    isHighlighted: false
+                })
+            }
+
+            // Add the highlighted text
+            const highlightedText = content.substring(range.start, range.end)
+            const matchingFlag = sortedFlags.find(flag =>
+                flag.clause_text &&
+                content.substring(range.start, range.end).toLowerCase().includes(flag.clause_text.toLowerCase())
+            )
+
+            segments.push({
+                text: highlightedText,
+                isHighlighted: true,
+                flag: matchingFlag
+            })
+
+            currentPos = range.end
+        })
+
+        // Add remaining text
+        if (currentPos < content.length) {
+            segments.push({
+                text: content.substring(currentPos),
+                isHighlighted: false
+            })
+        }
+
+        // Render the segments
+        return (
+            <span className="whitespace-pre-wrap">
+                {segments.map((segment, index) => {
+                    if (!segment.isHighlighted) {
+                        return <span key={index}>{segment.text}</span>
+                    }
+
+                    const flag = segment.flag
+                    if (!flag) {
+                        return <span key={index}>{segment.text}</span>
+                    }
+
+                    const riskLevel = flag.risk_level?.toLowerCase() || 'medium'
+                    const colorClass = highlightColors[riskLevel as keyof typeof highlightColors] || highlightColors.medium
+
+                    return (
+                        <span
+                            key={index}
+                            className={`inline-block px-1 rounded cursor-pointer transition-all hover:shadow-lg ${colorClass}`}
+                            title={`${flag.type?.replace('_', ' ') || 'Unknown'}: ${flag.description || 'No description'}`}
+                            onClick={() => setHoveredClause({
+                                flag: flag,
+                                position: { x: 0, y: 0 } // Position will be calculated on hover
+                            })}
+                            onMouseEnter={(e) => {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                setHoveredClause({
+                                    flag: flag,
+                                    position: {
+                                        x: rect.left + rect.width / 2,
+                                        y: rect.top - 10
+                                    }
+                                })
+                            }}
+                            onMouseLeave={() => {
+                                setTimeout(() => setHoveredClause(null), 3000)
+                            }}
+                        >
+                            {segment.text}
+                        </span>
+                    )
+                })}
+            </span>
+        )
     }
 
     // Function to highlight citation matches in text content
     const highlightCitationMatches = (content: string) => {
         if (!highlightPage || !content) {
-            return highlightRiskyClauses(content)
+            return createHighlightedText(content)
         }
 
         // For text files, highlightPage might contain a text snippet to highlight
         // This would come from the citation's context
-        let highlightedContent = content
-
-        // Try to find and highlight the citation context if it's a text snippet
         if (typeof highlightPage === 'string' && highlightPage.length > 10) {
+            // Create citation-highlighted content first, then apply risk highlighting
             const escapedText = highlightPage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
             const regex = new RegExp(`(${escapedText})`, 'gi')
-            highlightedContent = highlightedContent.replace(regex,
-                `<span id="citation-highlight" class="bg-blue-600 bg-opacity-40 text-white px-1 rounded border-l-2 border-blue-400">$1</span>`
+            const citationHighlighted = content.replace(regex,
+                `<mark class="bg-blue-600 bg-opacity-40 text-white px-1 rounded border-l-2 border-blue-400">$1</mark>`
             )
+            return createHighlightedText(citationHighlighted)
         }
 
-        return highlightRiskyClauses(highlightedContent)
+        return createHighlightedText(content)
+    }
+
+    // Component for rendering highlighted text content
+    const HighlightedTextContent = ({ content }: { content: string }) => {
+        return (
+            <div className="text-sm text-black whitespace-pre-wrap leading-relaxed">
+                {highlightCitationMatches(content)}
+            </div>
+        )
     }
 
     // Auto-scroll to citation highlight when component mounts or updates
     useEffect(() => {
         if (textContent && highlightPage) {
             setTimeout(() => {
-                const highlightElement = window.document.getElementById('citation-highlight')
+                const highlightElement = window.document.querySelector('mark')
                 if (highlightElement) {
                     highlightElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
                 }
@@ -122,69 +271,21 @@ export function DocumentViewer({ document, highlightPage, onSendMessage }: Docum
         }
     }, [textContent, highlightPage])
 
-    // Set up global tooltip functions
+    // Add click-away functionality for tooltips
     useEffect(() => {
-        (window as any).showClauseTooltip = (event: MouseEvent, clauseId: string) => {
-            // Clear any existing hide timeout
-            if (hideTimeoutRef.current) {
-                clearTimeout(hideTimeoutRef.current)
-                hideTimeoutRef.current = null
-            }
-
-            const element = window.document.getElementById(clauseId)
-            if (element) {
-                const flagData = element.getAttribute('data-flag')
-                if (flagData) {
-                    try {
-                        const flag = JSON.parse(flagData.replace(/&#39;/g, "'"))
-                        const rect = element.getBoundingClientRect()
-                        setHoveredClause({
-                            flag,
-                            position: {
-                                x: rect.left + rect.width / 2,
-                                y: rect.top - 10
-                            }
-                        })
-                    } catch (e) {
-                        console.error('Error parsing flag data:', e)
-                    }
-                }
-            }
-        }
-
-        (window as any).hideClauseTooltip = () => {
-            // Set a 3-second timeout before hiding the tooltip
-            hideTimeoutRef.current = setTimeout(() => {
-                setHoveredClause(null)
-                hideTimeoutRef.current = null
-            }, 3000)
-        }
-
-        // Add click-away functionality
         const handleClickAway = (event: MouseEvent) => {
             if (hoveredClause) {
                 // Check if the click is not on the tooltip or highlighted clause
                 const target = event.target as Element
-                if (!target.closest('.tooltip-container') && !target.closest('[id^="clause-"]')) {
+                if (!target.closest('.tooltip-container') && !target.closest('.cursor-pointer')) {
                     setHoveredClause(null)
-                    if (hideTimeoutRef.current) {
-                        clearTimeout(hideTimeoutRef.current)
-                        hideTimeoutRef.current = null
-                    }
                 }
             }
         }
 
         window.document.addEventListener('click', handleClickAway)
-
         return () => {
-            // Clear timeout on cleanup
-            if (hideTimeoutRef.current) {
-                clearTimeout(hideTimeoutRef.current)
-            }
             window.document.removeEventListener('click', handleClickAway)
-            delete (window as any).showClauseTooltip
-            delete (window as any).hideClauseTooltip
         }
     }, [hoveredClause])
 
@@ -336,10 +437,7 @@ export function DocumentViewer({ document, highlightPage, onSendMessage }: Docum
                                             <div className="text-xs text-gray-500 mb-4 p-2 bg-blue-50 rounded border">
                                                 📄 Text view with highlighting enabled. Use the "PDF View" button to return to the original format.
                                             </div>
-                                            <div
-                                                className="text-sm text-black whitespace-pre-wrap leading-relaxed"
-                                                dangerouslySetInnerHTML={{ __html: highlightCitationMatches(textContent) }}
-                                            />
+                                            <HighlightedTextContent content={textContent} />
                                         </div>
                                     </div>
                                 ) : (
@@ -472,10 +570,7 @@ export function DocumentViewer({ document, highlightPage, onSendMessage }: Docum
                             ) : textContent ? (
                                 <div className="h-full bg-white rounded overflow-auto">
                                     <div className="p-4">
-                                        <div
-                                            className="text-sm text-black whitespace-pre-wrap font-mono leading-relaxed"
-                                            dangerouslySetInnerHTML={{ __html: highlightCitationMatches(textContent) }}
-                                        />
+                                        <HighlightedTextContent content={textContent} />
                                     </div>
                                 </div>
                             ) : (
@@ -507,10 +602,7 @@ export function DocumentViewer({ document, highlightPage, onSendMessage }: Docum
                             ) : textContent ? (
                                 <div className="h-full bg-white rounded overflow-auto">
                                     <div className="p-4">
-                                        <div
-                                            className="text-sm text-black whitespace-pre-wrap leading-relaxed"
-                                            dangerouslySetInnerHTML={{ __html: highlightCitationMatches(textContent) }}
-                                        />
+                                        <HighlightedTextContent content={textContent} />
                                     </div>
                                 </div>
                             ) : (

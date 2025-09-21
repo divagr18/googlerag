@@ -53,3 +53,6 @@ Thumbs.db
 ehthumbs.db
 frontend/.next/
 chroma_db/
+contract_test.html
+.gitignore
+ideal_contracts_db/

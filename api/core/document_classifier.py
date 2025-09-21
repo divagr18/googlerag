@@ -36,7 +36,22 @@ class DocumentClassifier:
                 r"(?i)\bemployee\b", r"(?i)\bemployer\b", r"(?i)\bcompany\b", r"(?i)\bsalary\b",
                 r"(?i)\bwages\b", r"(?i)\bpayroll\b", r"(?i)\bworkplace\b", r"(?i)\bovertime\b",
                 r"(?i)\btermination\b", r"(?i)\bresignation\b", r"(?i)\bconfidentiality\b",
-                r"(?i)non[\-\s]?compete", r"(?i)intellectual\s+property", r"(?i)work\s+hours?"
+                r"(?i)non[\-\s]?compete", r"(?i)intellectual\s+property", r"(?i)work\s+hours?",
+                # Additional employment-specific patterns
+                r"(?i)annual\s+salary", r"(?i)compensation\s+package", r"(?i)benefits\s+package",
+                r"(?i)sick\s+leave", r"(?i)vacation\s+days?", r"(?i)paid\s+leave", r"(?i)maternity\s+leave",
+                r"(?i)performance\s+review", r"(?i)job\s+responsibilities", r"(?i)reporting\s+(?:to|manager)",
+                r"(?i)start\s+date", r"(?i)joining\s+date", r"(?i)full[\-\s]?time", r"(?i)part[\-\s]?time",
+                r"(?i)working\s+hours", r"(?i)office\s+hours", r"(?i)remote\s+work", r"(?i)work\s+from\s+home",
+                r"(?i)notice\s+period", r"(?i)severance\s+pay", r"(?i)gratuity", r"(?i)pension",
+                r"(?i)disciplinary\s+action", r"(?i)code\s+of\s+conduct", r"(?i)dress\s+code",
+                r"(?i)training\s+period", r"(?i)induction", r"(?i)orientation",
+                r"(?i)stock\s+options", r"(?i)equity", r"(?i)bonus", r"(?i)incentive",
+                r"(?i)appraisal", r"(?i)increment", r"(?i)promotion", r"(?i)demotion",
+                r"(?i)background\s+check", r"(?i)medical\s+examination", r"(?i)drug\s+test",
+                r"(?i)chief\s+(?:marketing|technology|executive|financial)\s+officer",
+                r"(?i)manager", r"(?i)director", r"(?i)executive", r"(?i)supervisor",
+                r"(?i)team\s+lead", r"(?i)department", r"(?i)division", r"(?i)designation"
             ],
             "nda": [
                 r"(?i)non-?disclosure\s+agreement", r"(?i)confidentiality\s+agreement",
@@ -57,12 +72,79 @@ class DocumentClassifier:
             "sale": [
                 r"(?i)sale\s+(?:agreement|deed)", r"(?i)purchase\s+agreement",
                 r"(?i)buy.*sell", r"(?i)vendor.*purchaser", r"(?i)sale\s+of\s+goods",
-                r"(?i)transfer\s+of\s+ownership", r"(?i)sale\s+consideration"
+                r"(?i)transfer\s+of\s+ownership", r"(?i)sale\s+consideration",
+                # Enhanced purchase/sale patterns
+                r"(?i)\bseller\b", r"(?i)\bbuyer\b", r"(?i)\bvendor\b", r"(?i)\bpurchaser\b",
+                r"(?i)\bsale\s+price\b", r"(?i)\bpurchase\s+price\b", r"(?i)\bconsideration\b",
+                r"(?i)advance\s+payment", r"(?i)down\s+payment", r"(?i)token\s+amount",
+                r"(?i)earnest\s+money", r"(?i)booking\s+amount", r"(?i)security\s+deposit",
+                r"(?i)possession", r"(?i)delivery", r"(?i)handover", r"(?i)completion\s+date",
+                r"(?i)property\s+sale", r"(?i)real\s+estate", r"(?i)immovable\s+property",
+                r"(?i)movable\s+property", r"(?i)goods\s+and\s+services", r"(?i)assets",
+                r"(?i)title\s+(?:deed|documents?)", r"(?i)ownership\s+documents?", r"(?i)registration",
+                r"(?i)stamp\s+duty", r"(?i)registration\s+fee", r"(?i)transfer\s+charges",
+                r"(?i)mutation", r"(?i)khata", r"(?i)survey\s+number", r"(?i)plot\s+number",
+                r"(?i)apartment", r"(?i)flat", r"(?i)villa", r"(?i)house", r"(?i)land",
+                r"(?i)commercial\s+property", r"(?i)residential\s+property", r"(?i)office\s+space",
+                r"(?i)shop", r"(?i)warehouse", r"(?i)factory", r"(?i)building",
+                r"(?i)square\s+(?:feet|ft)", r"(?i)sq\.?\s*ft", r"(?i)area", r"(?i)carpet\s+area",
+                r"(?i)built[\-\s]?up\s+area", r"(?i)super\s+built[\-\s]?up\s+area",
+                r"(?i)possession\s+certificate", r"(?i)completion\s+certificate", r"(?i)occupancy\s+certificate",
+                r"(?i)approved\s+plan", r"(?i)sanctioned\s+plan", r"(?i)municipal\s+approval",
+                r"(?i)clear\s+title", r"(?i)marketable\s+title", r"(?i)encumbrance\s+certificate",
+                r"(?i)property\s+tax", r"(?i)maintenance\s+charges", r"(?i)society\s+dues",
+                r"(?i)defects\s+liability", r"(?i)warranty", r"(?i)guarantee", r"(?i)defects",
+                r"(?i)fixtures\s+and\s+fittings", r"(?i)furnishing", r"(?i)amenities",
+                r"(?i)parking\s+space", r"(?i)car\s+park", r"(?i)garage", r"(?i)balcony"
             ],
             "loan": [
                 r"(?i)loan\s+agreement", r"(?i)credit\s+agreement", r"(?i)borrower.*lender",
                 r"(?i)principal\s+amount", r"(?i)interest\s+rate", r"(?i)repayment\s+schedule",
-                r"(?i)mortgage\s+deed", r"(?i)security\s+for\s+loan"
+                r"(?i)mortgage\s+deed", r"(?i)security\s+for\s+loan",
+                # Enhanced loan-specific patterns
+                r"(?i)\bborrower\b", r"(?i)\blender\b", r"(?i)\bloan\s+amount", r"(?i)\bprincipal\b",
+                r"(?i)\binterest\b", r"(?i)\bemi\b", r"(?i)equated\s+monthly\s+installment",
+                r"(?i)monthly\s+installment", r"(?i)repayment\s+terms", r"(?i)loan\s+tenure",
+                r"(?i)loan\s+period", r"(?i)maturity\s+date", r"(?i)due\s+date",
+                r"(?i)default", r"(?i)foreclosure", r"(?i)prepayment", r"(?i)penalty",
+                r"(?i)processing\s+fee", r"(?i)administrative\s+charges", r"(?i)late\s+payment",
+                r"(?i)collateral", r"(?i)security\s+(?:deposit|guarantee)", r"(?i)guarantor",
+                r"(?i)co[\-\s]?borrower", r"(?i)joint\s+borrower", r"(?i)surety",
+                r"(?i)personal\s+loan", r"(?i)home\s+loan", r"(?i)business\s+loan", r"(?i)education\s+loan",
+                r"(?i)vehicle\s+loan", r"(?i)car\s+loan", r"(?i)bike\s+loan", r"(?i)gold\s+loan",
+                r"(?i)mortgage", r"(?i)hypothecation", r"(?i)pledge", r"(?i)lien",
+                r"(?i)bank", r"(?i)nbfc", r"(?i)financial\s+institution", r"(?i)credit\s+score",
+                r"(?i)cibil", r"(?i)credit\s+history", r"(?i)income\s+proof", r"(?i)salary\s+slip",
+                r"(?i)disbursement", r"(?i)sanction", r"(?i)approval", r"(?i)credit\s+limit",
+                r"(?i)outstanding\s+amount", r"(?i)balance\s+transfer", r"(?i)top[\-\s]?up",
+                r"(?i)floating\s+rate", r"(?i)fixed\s+rate", r"(?i)rate\s+of\s+interest",
+                r"(?i)compound\s+interest", r"(?i)simple\s+interest", r"(?i)annual\s+percentage\s+rate",
+                r"(?i)apr", r"(?i)rbi", r"(?i)reserve\s+bank", r"(?i)banking\s+regulation"
+            ],
+            "purchase": [
+                # Purchase-specific patterns (buyer's perspective)
+                r"(?i)purchase\s+(?:agreement|contract|deed)", r"(?i)buying\s+agreement",
+                r"(?i)acquisition\s+agreement", r"(?i)procurement\s+contract",
+                r"(?i)\bbuyer\b", r"(?i)\bpurchaser\b", r"(?i)\bacquirer\b",
+                r"(?i)purchase\s+order", r"(?i)purchase\s+price", r"(?i)buying\s+price",
+                r"(?i)procurement", r"(?i)acquisition", r"(?i)sourcing",
+                r"(?i)vendor\s+selection", r"(?i)supplier\s+agreement", r"(?i)goods\s+purchase",
+                r"(?i)equipment\s+purchase", r"(?i)bulk\s+purchase", r"(?i)wholesale\s+purchase"
+            ],
+            "property_sale": [
+                # Property-specific sale patterns
+                r"(?i)property\s+(?:sale|purchase)", r"(?i)real\s+estate\s+(?:sale|transaction)",
+                r"(?i)(?:house|home|apartment|flat|villa)\s+(?:sale|purchase)",
+                r"(?i)land\s+(?:sale|purchase)", r"(?i)plot\s+(?:sale|purchase)",
+                r"(?i)property\s+transfer", r"(?i)real\s+estate\s+transfer",
+                r"(?i)conveyance\s+deed", r"(?i)sale\s+deed", r"(?i)property\s+deed",
+                r"(?i)immovable\s+property", r"(?i)real\s+property", r"(?i)realty",
+                r"(?i)property\s+registration", r"(?i)sub[\-\s]?registrar", r"(?i)registrar\s+office"
+            ],
+            "loan_agreement": [
+                # Alternative naming for loan contracts
+                r"(?i)loan\s+agreement", r"(?i)lending\s+agreement", r"(?i)credit\s+facility",
+                r"(?i)financial\s+assistance", r"(?i)borrowing\s+agreement", r"(?i)advance\s+agreement"
             ]
         }
     
@@ -130,7 +212,12 @@ class DocumentClassifier:
             contract_type, type_confidence, patterns = self._classify_contract_type(text, filename)
             
             # Determine if we should run Guardian Score analysis
-            should_analyze = is_contract and contract_type in ["rental", "employment", "service"]
+            # Now analyzing all major contract types that can contain exploitation
+            # Based on ideal template categories: rental, employment, partnership, purchase, lease, loan_agreement, nda
+            should_analyze = is_contract and contract_type in [
+                "rental", "employment", "service", "partnership", "purchase", 
+                "lease", "loan_agreement", "loan", "nda", "property_sale"
+            ]
             
             return {
                 "is_contract": is_contract,

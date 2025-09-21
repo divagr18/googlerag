@@ -1022,16 +1022,32 @@ What would you like to explore first?`,
               <div className="mb-4">
                 <h4 className="text-xs font-medium text-zinc-400 mb-2">Risk Breakdown</h4>
                 <div className="space-y-2">
-                  {analysisData.subScores.map((item) => (
-                    <div key={item.name}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-zinc-300">{item.name}</span>
-                        <span className="text-zinc-400">{item.score}</span>
+                  {analysisData.subScores.map((item) => {
+                    // Determine color based on score (lower scores = higher risk = red)
+                    const getProgressColor = (score: number) => {
+                      if (score >= 70) return "bg-green-500"    // Good - Green
+                      if (score >= 40) return "bg-yellow-500"   // Medium - Yellow  
+                      return "bg-red-500"                       // Bad - Red
+                    }
+
+                    const progressColor = getProgressColor(item.score)
+
+                    return (
+                      <div key={item.name}>
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="text-zinc-300">{item.name}</span>
+                          <span className="text-zinc-400">{item.score}</span>
+                        </div>
+                        <div className="relative h-1 w-full overflow-hidden rounded-full bg-zinc-700">
+                          <div
+                            className={`h-full transition-all ${progressColor}`}
+                            style={{ width: `${item.score}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-zinc-500 mt-1">{item.flagCount} issue{item.flagCount !== 1 ? 's' : ''}</p>
                       </div>
-                      <Progress value={item.score} className="h-1" />
-                      <p className="text-xs text-zinc-500 mt-1">{item.flagCount} issue{item.flagCount !== 1 ? 's' : ''}</p>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )}
